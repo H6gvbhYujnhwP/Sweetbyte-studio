@@ -79,8 +79,10 @@ export default function Sidebar({ onLogout, activeView, onNavigate, user }) {
         </div>
       </div>
 
-      {/* Nav */}
-      <div style={{ flex:1, paddingTop:10 }}>
+      {/* Nav — scrolls on its own when the list is taller than the screen, so
+          the lower items and the Sign out footer are never clipped on short
+          viewports. minHeight:0 lets this flex child shrink below its content. */}
+      <div style={{ flex:1, minHeight:0, overflowY:'auto', paddingTop:10 }}>
 
         {showSocial && <>
           <div style={SECTION}>Social Media</div>
