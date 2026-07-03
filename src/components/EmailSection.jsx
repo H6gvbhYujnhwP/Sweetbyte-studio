@@ -2049,7 +2049,7 @@ function SubscriberView({list,onBack,onRefresh}){
   const filtered=subs.filter(s=>filter==='all'||s.status===filter).filter(s=>!search||s.email.includes(search.toLowerCase())||(s.name||'').toLowerCase().includes(search.toLowerCase()));
   const totalPages=Math.ceil(filtered.length/PER_PAGE);
   const paginated=filtered.slice((page-1)*PER_PAGE,page*PER_PAGE);
-  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0}}>
     <div style={{padding:'12px 20px',borderBottom:`0.5px solid ${BORDER}`,background:CARD,display:'flex',alignItems:'center',gap:12}}>
       <button onClick={onBack} style={{background:'none',border:'none',cursor:'pointer',color:MUTED,fontSize:12,padding:0}}>← Back to lists</button>
       <span style={{color:BORDER}}>|</span>
@@ -2288,7 +2288,7 @@ function CampaignQueue({emailClient,lists,onViewReport,onRefresh,onClientUpdated
 
   const getLists=()=>lists;
 
-  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0}}>
     <div style={{padding:'10px 16px',borderBottom:`0.5px solid ${BORDER}`,background:CARD,display:'flex',alignItems:'flex-end',gap:14,flexWrap:'wrap'}}>
       {/* Default From name. Auto-fills the From name on every new campaign
           and list for this customer. Saved on debounce. No placeholder text
@@ -2465,7 +2465,7 @@ function ClientPanel({emailClient,onRefresh,onClientUpdated,onEditClient}){
     <CampaignReport campaign={viewingReport} lists={lists} onBack={()=>setViewingReport(null)}/>
   );
 
-  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0}}>
     <div style={{padding:'12px 20px',borderBottom:`0.5px solid ${BORDER}`,background:CARD,display:'flex',alignItems:'center',gap:12}}>
       <div style={{width:32,height:32,borderRadius:8,background:emailClient.color||GREEN,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:600,flexShrink:0}}>{initials(emailClient.name)}</div>
       <div style={{flex:1}}>
@@ -2487,7 +2487,7 @@ function ClientPanel({emailClient,onRefresh,onClientUpdated,onEditClient}){
       ))}
     </div>
 
-    <div style={{flex:1,overflow:'hidden',display:'flex',flexDirection:'column',background:BG}}>
+    <div style={{flex:1,minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column',background:BG}}>
       {tab==='campaigns'&&<CampaignQueue emailClient={emailClient} lists={lists} onViewReport={setViewingReport} onRefresh={()=>{loadLists();onRefresh();}} onClientUpdated={onClientUpdated}/>}
       {tab==='lists'&&(
         <div style={{flex:1,overflow:'auto',padding:20}}>
@@ -2587,7 +2587,7 @@ export default function EmailSection({initialTab='customers'}){
         <div style={{fontSize:15,fontWeight:500,color:TEXT}}>Domain Health</div>
         <div style={{marginLeft:'auto'}}><Btn small onClick={loadDomains}>Refresh</Btn></div>
       </div>
-      <div style={{flex:1,overflow:'auto',padding:20,background:BG}}>
+      <div style={{flex:1,minHeight:0,overflow:'auto',padding:20,background:BG}}>
         {domainsLoading?<div style={{color:MUTED,textAlign:'center',padding:40}}>Checking all domains…</div>
         :domains.length===0?<div style={{color:MUTED,textAlign:'center',padding:40}}>No verified domains found.</div>
         :<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>{domains.map(d=><DomainCard key={d.domain} data={d}/>)}</div>}
@@ -3013,7 +3013,7 @@ function MailboxDetail({inbox, onRefresh}){
       onRefresh();
     }catch(e){ setPollMsg({ok:false,text:'Could not reach the server'}); setDisconnecting(false); }
   }
-  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,overflow:'hidden'}}>
+  return(<div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,minHeight:0,overflow:'hidden'}}>
 
     {/* Header */}
     <div style={{padding:'14px 20px',borderBottom:`0.5px solid ${BORDER}`,background:CARD,display:'flex',alignItems:'baseline',gap:12}}>
@@ -3094,7 +3094,7 @@ function MailboxDetail({inbox, onRefresh}){
     </div>
 
     {/* Reply list */}
-    <div style={{flex:1,overflowY:'auto',background:BG}}>
+    <div style={{flex:1,minHeight:0,overflowY:'auto',background:BG}}>
       {loading?<div style={{color:MUTED,textAlign:'center',padding:40,fontSize:13}}>Loading…</div>
       :replies.length===0?<div style={{color:MUTED,textAlign:'center',padding:40,fontSize:13}}>No emails in this view</div>
       :replies.map(r=>(
