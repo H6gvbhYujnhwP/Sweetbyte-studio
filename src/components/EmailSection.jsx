@@ -1695,7 +1695,23 @@ function CampaignReport({campaign,lists,onBack}){
     fetch(`/api/email/campaigns/${campaign.id}/report`).then(r=>r.json()).then(setReport);
   },[campaign.id]);
 
-  function exportData(type){window.open(`/api/email/campaigns/${campaign.id}/export/${type}`);}
+  async function exportData(type){
+    // Download via fetch (not window.open) so the admin login token — added to
+    // every /api/ request by the interceptor in App.jsx — is carried on the
+    // request. window.open opens a bare browser tab that sends no Authorization
+    // header, which the mail routes now reject with 401 "Unauthorised". Same
+    // fetch-then-blob pattern the subscriber-list Export already uses.
+    try{
+      const r=await fetch(`/api/email/campaigns/${campaign.id}/export/${type}`);
+      if(!r.ok){alert(`Export failed (${r.status}). Please refresh the page and try again.`);return;}
+      const csv=await r.text();
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      a.download=`${type}-${campaign.id}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }catch(e){alert('Export failed. Please refresh the page and try again.');}
+  }
 
   const c=campaign;
   const sent=c.sent_count||0;
