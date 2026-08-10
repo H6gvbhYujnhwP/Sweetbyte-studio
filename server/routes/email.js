@@ -1807,6 +1807,57 @@ router.get('/campaigns/:id/export/:type', (req, res) => {
     return res.send(header + body);
   }
 
+  // ── Export sent → CSV with the engagement columns ───────────────────────────
+  // "Export sent" = everyone the campaign has reached so far. Same engagement
+  // columns as the clickers export (Number of clicks, Number of opens, Website,
+  // Company) bolted onto Name/Email/Status, and sorted so the people who engaged
+  // most sit at the TOP — so you can read "who clicked our pages/ads" straight
+  // off this file. Non-clickers simply show 0 clicks and a blank Website.
+  if (type === 'recipients') {
+    const people = db.prepare(`
+      SELECT es.id AS sid, es.name AS name, es.email AS email,
+             CASE
+               WHEN esnd.bounced_at IS NOT NULL THEN 'Bounced'
+               WHEN esnd.opened_at  IS NOT NULL THEN 'Opened'
+               WHEN esnd.status = 'failed'      THEN 'Send failed'
+               ELSE 'Sent'
+             END AS status,
+             esnd.click_count AS clicks,
+             esnd.open_count AS opens
+      FROM email_sends esnd
+      JOIN email_subscribers es ON es.id = esnd.subscriber_id
+      WHERE esnd.campaign_id = ?
+      ORDER BY esnd.click_count DESC, esnd.open_count DESC, es.email ASC
+    `).all(req.params.id);
+
+    const urlRows = db.prepare(`
+      SELECT DISTINCT subscriber_id AS sid, url
+      FROM email_link_clicks
+      WHERE campaign_id = ?
+    `).all(req.params.id);
+    const urlsBySid = new Map();
+    for (const u of urlRows) {
+      if (!urlsBySid.has(u.sid)) urlsBySid.set(u.sid, []);
+      urlsBySid.get(u.sid).push(u.url);
+    }
+
+    const header = ['Name','Email','Status','Number of clicks','Number of opens','Website','Company']
+      .map(csvCell).join(',') + '\n';
+    const body = people.map(p => [
+      p.name || '',
+      p.email || '',
+      p.status || '',
+      p.clicks || 0,
+      p.opens || 0,
+      (urlsBySid.get(p.sid) || []).join(' | '),
+      companyFromEmail(p.email),
+    ].map(csvCell).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="recipients-${req.params.id}.csv"`);
+    return res.send(header + body);
+  }
+
   let rows = [];
   const header = 'Name,Email,Status\n';
 
@@ -1830,23 +1881,6 @@ router.get('/campaigns/:id/export/:type', (req, res) => {
       FROM email_subscribers es
       WHERE es.list_id=? AND es.status='bounced'
     `).all(campaign.list_id);
-  } else if (type === 'recipients') {
-    // Everyone the campaign has been sent to so far. For an in-flight drip
-    // this answers "who's actually received the email at this point".
-    rows = db.prepare(`
-      SELECT s.name, s.email,
-        CASE
-          WHEN esnd.bounced_at IS NOT NULL THEN 'Bounced'
-          WHEN esnd.opened_at  IS NOT NULL THEN 'Sent (opened)'
-          WHEN esnd.status = 'failed'      THEN 'Send failed'
-          ELSE 'Sent'
-        END as status,
-        esnd.sent_at
-      FROM email_subscribers s
-      JOIN email_sends esnd ON esnd.subscriber_id = s.id
-      WHERE esnd.campaign_id = ?
-      ORDER BY esnd.sent_at DESC
-    `).all(req.params.id);
   } else if (type === 'queued') {
     // Everyone on the list who hasn't been sent yet. Useful while a drip is
     // mid-flight to see who's still queued.
