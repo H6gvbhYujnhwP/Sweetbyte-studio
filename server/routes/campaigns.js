@@ -515,6 +515,7 @@ router.post('/:id/add-posts', requireAuth, (req, res) => {
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const count = Math.max(1, Math.min(24, Number(req.body?.count) || 3));
+  console.log(`[add-posts] REQUEST campaign=${campaign.id} count=${count} stage=${campaign.stage} images_generated=${campaign.images_generated} posts_in_db=${JSON.parse(campaign.posts_json || '[]').length}`);
 
   // Mark the add as started and respond IMMEDIATELY. The actual writing +
   // image generation runs in the background (like the main campaign run) and
@@ -552,9 +553,11 @@ async function runAddPosts(campaign, client, count) {
   const algorithmBrief = getCurrentBrief();
 
   // 1) Write the new post text. Give each a fresh id so image keys can't collide.
+  console.log(`[add-posts] runAddPosts START campaign=${campaign.id} count=${count} existing=${existing.length} includeImages=${includeImages} — calling generatePosts…`);
   const generated = await generatePosts(client, () => {}, contentDna, algorithmBrief, count, existingTopics);
   const newPosts = (generated.posts || []).map(p => ({ ...p, id: p.id || uuid(), image_url: null }));
   const addTotal = newPosts.length;
+  console.log(`[add-posts] generatePosts returned ${addTotal} post(s); includeImages=${includeImages} existing=${existing.length}`);
 
   // Append immediately so the new cards show right away (as "Generating…" if
   // images are still to come), then let the frontend load the combined set.
@@ -567,6 +570,8 @@ async function runAddPosts(campaign, client, count) {
     add_total: addTotal,
     add_done: includeImages ? 0 : addTotal,
   });
+  const rbAppend = JSON.parse((db.prepare('SELECT posts_json FROM campaigns WHERE id = ?').get(campaign.id)?.posts_json) || '[]').length;
+  console.log(`[add-posts] AFTER append write: DB posts_json length=${rbAppend} (expected ${combined.length})`);
   sendSSE(campaign.id, { type: 'status', campaign: withLogoDefaults(db.prepare('SELECT * FROM campaigns WHERE id = ?').get(campaign.id)) });
   sendSSE(campaign.id, { type: 'progress', add_status: 'running', add_total: addTotal, add_done: includeImages ? 0 : addTotal });
 
@@ -611,6 +616,8 @@ async function runAddPosts(campaign, client, count) {
 
   // 3) Done — clear the flag; the campaign stays in review with the new posts.
   updateCampaign(campaign.id, { add_status: null, add_done: addTotal, add_total: addTotal });
+  const rbFinal = JSON.parse((db.prepare('SELECT posts_json FROM campaigns WHERE id = ?').get(campaign.id)?.posts_json) || '[]').length;
+  console.log(`[add-posts] DONE campaign=${campaign.id} addTotal=${addTotal} final DB posts_json length=${rbFinal}`);
   sendSSE(campaign.id, { type: 'progress', add_status: 'done', add_done: addTotal, add_total: addTotal });
   sendSSE(campaign.id, { type: 'status', campaign: withLogoDefaults(db.prepare('SELECT * FROM campaigns WHERE id = ?').get(campaign.id)) });
   sendSSE(campaign.id, { type: 'log', message: `Added ${addTotal} post${addTotal === 1 ? '' : 's'}.` });
