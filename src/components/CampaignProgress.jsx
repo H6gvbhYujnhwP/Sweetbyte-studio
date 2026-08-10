@@ -129,7 +129,8 @@ export default function CampaignProgress({ campaignId, onComplete }) {
         .then(d => {
           setCampaign(prev => {
             if (!prev || prev.stage !== d.stage || prev.progress !== d.progress ||
-                prev.posts_generated !== d.posts_generated || prev.images_generated !== d.images_generated) {
+                prev.posts_generated !== d.posts_generated || prev.images_generated !== d.images_generated ||
+                prev.add_status !== d.add_status || prev.add_done !== d.add_done) {
               parsePosts(d);
               if (d.files_json) { try { setFiles(JSON.parse(d.files_json)); } catch (_) {} }
               return d;
@@ -196,27 +197,25 @@ export default function CampaignProgress({ campaignId, onComplete }) {
   }
 
   async function handleAddPosts() {
-    setAddingPosts(true);
+    const n = addCount;
+    // Show the bar immediately; the background job + live feed/polling take over.
+    setCampaign(prev => prev ? { ...prev, add_status: 'running', add_done: 0, add_total: n } : prev);
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/add-posts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: addCount })
+        body: JSON.stringify({ count: n })
       });
       const data = await res.json();
       if (!res.ok) {
+        setCampaign(prev => prev ? { ...prev, add_status: null } : prev);
         alert(data.error || 'Failed to add posts');
-      } else {
-        // Refresh the campaign + posts so the new ones appear in the grid.
-        const r = await fetch(`/api/campaigns/${campaignId}`);
-        const d = await r.json();
-        setCampaign(d);
-        parsePosts(d);
       }
+      // On success we do nothing else — new posts drop into the grid and the
+      // bar fills as the background job reports progress.
     } catch (err) {
+      setCampaign(prev => prev ? { ...prev, add_status: null } : prev);
       alert('Failed to add posts');
-    } finally {
-      setAddingPosts(false);
     }
   }
 
@@ -325,6 +324,7 @@ export default function CampaignProgress({ campaignId, onComplete }) {
   const currentStage  = campaign?.stage;
   const stageIdx      = STAGES.findIndex(s => s.key === currentStage);
   const isAwaiting    = currentStage === 'awaiting_approval';
+  const adding        = campaign?.add_status === 'running';
   const isDone        = campaign?.status === 'completed';
   const isFailed      = campaign?.status === 'failed';
   const isRunning     = !isDone && !isFailed && !isAwaiting;
@@ -416,17 +416,37 @@ export default function CampaignProgress({ campaignId, onComplete }) {
       {(isAwaiting || isDone) && posts.length > 0 && (
         <div style={{ marginBottom: 24 }}>
 
-          {/* Add more posts — admin only, while in review */}
-          {isAwaiting && (
+          {/* Add more posts — admin only, while in review.
+              While a batch is generating it swaps to a live progress bar. */}
+          {isAwaiting && (adding ? (
+            <div style={{ background: '#fff', border: '0.5px solid #e0e0dc', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: DARK }}>
+                  Creating {campaign.add_total || addCount} more post{(campaign.add_total || addCount) === 1 ? '' : 's'}…
+                </span>
+                <span style={{ fontSize: 13, color: '#888' }}>
+                  {campaign.add_done || 0} of {campaign.add_total || addCount} done
+                </span>
+              </div>
+              <div style={{ height: 8, background: LIGHT, borderRadius: 6, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.round(((campaign.add_done || 0) / Math.max(1, campaign.add_total || addCount)) * 100)}%`,
+                  height: '100%', background: GREEN, borderRadius: 6, transition: 'width 0.4s'
+                }} />
+              </div>
+              <div style={{ fontSize: 12, color: '#aaa', marginTop: 8 }}>
+                Keep this tab open — new posts drop in below as they finish. Your existing posts stay put.
+              </div>
+            </div>
+          ) : (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', background: '#fff', border: '0.5px solid #e0e0dc', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: '#888' }}>
-                <strong style={{ color: '#1a1a1a', fontWeight: 600 }}>Add more posts</strong> — fresh topics, no duplicates. Images and engine match this set.
+                <strong style={{ color: '#1a1a1a', fontWeight: 600 }}>Add more posts</strong> — fresh topics, no duplicates. Images and engine match this set. Adds this many on top of what's here.
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <select
                   value={addCount}
                   onChange={e => setAddCount(Number(e.target.value))}
-                  disabled={addingPosts}
                   style={{ fontSize: 13, padding: '7px 10px', border: '0.5px solid #d0d0cc', borderRadius: 7, background: '#fff', color: '#1a1a1a' }}
                 >
                   <option value={3}>3 posts</option>
@@ -437,14 +457,13 @@ export default function CampaignProgress({ campaignId, onComplete }) {
                 </select>
                 <button
                   onClick={handleAddPosts}
-                  disabled={addingPosts}
-                  style={{ fontSize: 13, padding: '7px 16px', border: '0.5px solid #d0d0cc', borderRadius: 7, background: addingPosts ? '#f5f5f3' : '#fff', color: '#1a1a1a', cursor: addingPosts ? 'not-allowed' : 'pointer', fontWeight: 500 }}
+                  style={{ fontSize: 13, padding: '7px 16px', border: '0.5px solid #d0d0cc', borderRadius: 7, background: '#fff', color: '#1a1a1a', cursor: 'pointer', fontWeight: 500 }}
                 >
-                  {addingPosts ? 'Adding…' : '+ Add'}
+                  + Add
                 </button>
               </div>
             </div>
-          )}
+          ))}
 
           {/* Deploy banner — two-button flow (decision #72).
               State A: not yet sent → two buttons.
@@ -463,29 +482,34 @@ export default function CampaignProgress({ campaignId, onComplete }) {
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 <button
                   onClick={handleSendToCustomer}
-                  disabled={deploying}
+                  disabled={deploying || adding}
                   style={{
                     flex: 1, minWidth: 220,
                     background: '#fff', color: '#185FA5', border: '1px solid #85B7EB',
                     padding: '11px 20px', borderRadius: 8, fontWeight: 600, fontSize: 13,
-                    cursor: deploying ? 'not-allowed' : 'pointer'
+                    cursor: (deploying || adding) ? 'not-allowed' : 'pointer', opacity: adding ? 0.5 : 1
                   }}
                 >
                   {deploying ? 'Working…' : 'Send to customer for approval'}
                 </button>
                 <button
                   onClick={handleDeploy}
-                  disabled={deploying}
+                  disabled={deploying || adding}
                   style={{
                     flex: 1, minWidth: 220,
-                    background: deploying ? '#9FE1CB' : GREEN, color: '#fff', border: 'none',
+                    background: (deploying || adding) ? '#9FE1CB' : GREEN, color: '#fff', border: 'none',
                     padding: '11px 20px', borderRadius: 8, fontWeight: 600, fontSize: 13,
-                    cursor: deploying ? 'not-allowed' : 'pointer'
+                    cursor: (deploying || adding) ? 'not-allowed' : 'pointer'
                   }}
                 >
                   {deploying ? 'Working…' : 'Push to Supergrow scheduled'}
                 </button>
               </div>
+              {adding && (
+                <div style={{ fontSize: 11, color: '#b8860b', marginTop: 10 }}>
+                  Finishing the new posts first — you can send or push once they're all done.
+                </div>
+              )}
               <div style={{ fontSize: 11, color: '#aaa', marginTop: 11, lineHeight: 1.5 }}>
                 Left: the customer reviews in their portal, approves there, then it schedules.
                 &nbsp;·&nbsp; Right: skips the customer, schedules now. Supergrow picks the exact posting times from its calendar slots.
@@ -597,7 +621,7 @@ export default function CampaignProgress({ campaignId, onComplete }) {
                       ? <img src={post.image_url} alt={`Post ${i + 1}`} style={{ width: '100%', height: 'auto', maxHeight: 300, objectFit: 'contain', background: '#f5f5f3', display: 'block' }} onError={e => { e.target.style.display = 'none'; }} />
                       : <div style={{ height: 80, background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 11, color: '#bbb' }}>No image generated</span></div>
                     }
-                    {(isRegenImg || isRecompLogo) && (
+                    {(isRegenImg || isRecompLogo || (adding && !post.image_url)) && (
                       <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.80)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6, textAlign: 'center', padding: 12 }}>
                         <div style={{ width: 24, height: 24, border: `2px solid ${GREEN}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
                         <span style={{ fontSize: 11, color: DARK, fontWeight: 500 }}>{isRecompLogo ? 'Updating logo…' : 'Generating…'}</span>

@@ -100,6 +100,15 @@ try { db.exec("ALTER TABLE campaigns ADD COLUMN deployed_by TEXT"); } catch (_) 
 // campaign reaches stage='done' via either route.
 try { db.exec("ALTER TABLE campaigns ADD COLUMN sent_to_customer_at TEXT"); } catch (_) {}
 
+// ── add-posts progress columns ───────────────────────────────────────────────
+// Track a background "add more posts" batch on a campaign that's in review, so
+// the progress bar survives a dropped live feed (the 8s poll reads these).
+// add_status: NULL/'done' = not adding, 'running' = in progress, 'error' = failed.
+// add_done/add_total drive the "X of N done" bar. Never touch the campaign stage.
+try { db.exec("ALTER TABLE campaigns ADD COLUMN add_status TEXT"); } catch (_) {}
+try { db.exec("ALTER TABLE campaigns ADD COLUMN add_done INTEGER DEFAULT 0"); } catch (_) {}
+try { db.exec("ALTER TABLE campaigns ADD COLUMN add_total INTEGER DEFAULT 0"); } catch (_) {}
+
 // ── services.customer_pitch column migration ─────────────────────────────────
 // The original `description` column is admin-facing operator text — what the
 // service does and how to wire it up. The customer_pitch column is the

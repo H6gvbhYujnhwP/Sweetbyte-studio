@@ -502,81 +502,119 @@ router.post('/:id/cancel', requireAuth, (req, res) => {
 // whatever image engine the client is set to (so gpt_image clients get
 // designed ads). Synchronous — keep top-ups modest (3–6) for a snappy
 // response; large adds take a while because each image is generated in turn.
-router.post('/:id/add-posts', requireAuth, async (req, res) => {
+router.post('/:id/add-posts', requireAuth, (req, res) => {
   const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
   if (campaign.stage !== 'awaiting_approval') {
     return res.status(400).json({ error: `Posts can only be added while a campaign is in review (current stage: ${campaign.stage}).` });
   }
+  if (campaign.add_status === 'running') {
+    return res.status(409).json({ error: 'Already adding posts — let the current batch finish.' });
+  }
   const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(campaign.client_id);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const count = Math.max(1, Math.min(24, Number(req.body?.count) || 3));
+
+  // Mark the add as started and respond IMMEDIATELY. The actual writing +
+  // image generation runs in the background (like the main campaign run) and
+  // streams progress over SSE. We also persist add_status/add_done/add_total so
+  // the 8-second polling fallback can drive the progress bar even if the live
+  // feed drops. Previously this whole job ran inside the request, so a big batch
+  // (e.g. 12 posts × ~7s/image) blew past the browser/proxy timeout and nothing
+  // came back — the posts never appeared.
+  updateCampaign(campaign.id, { add_status: 'running', add_done: 0, add_total: count });
+  sendSSE(campaign.id, { type: 'progress', add_status: 'running', add_done: 0, add_total: count });
+  res.json({ ok: true, adding: count });
+
+  runAddPosts(campaign, client, count).catch(err => {
+    console.error('[campaigns] add-posts background failed:', err.message);
+    // Leave the existing posts intact; just clear the flag and surface the error.
+    updateCampaign(campaign.id, { add_status: 'error' });
+    sendSSE(campaign.id, { type: 'progress', add_status: 'error' });
+    sendSSE(campaign.id, { type: 'log', message: `Add posts failed: ${err.message}` });
+  });
+});
+
+// Background worker for add-posts. Appends `count` fresh posts to a campaign
+// that's in review, generating images to match the existing set, and reports
+// progress as it goes. Never changes the campaign's stage — it stays in review
+// the whole time so the operator's approve buttons come straight back when done.
+async function runAddPosts(campaign, client, count) {
   const existing = JSON.parse(campaign.posts_json || '[]');
-  // Topics/angles already in the campaign → fed to the generator as a do-not-repeat list.
   const existingTopics = existing
     .map(p => [p.topic, p.angle].filter(Boolean).join(' — '))
     .filter(Boolean);
-  // Match the existing set: images only if the campaign already has images.
   const includeImages = (campaign.images_generated || 0) > 0;
 
-  try {
-    // Pull the same context the original run used, so added posts stay on-voice.
-    let contentDna = null;
-    try { contentDna = await getContentDna(client.supergrow_workspace_id, client.supergrow_api_key); } catch (_) {}
-    const algorithmBrief = getCurrentBrief();
+  let contentDna = null;
+  try { contentDna = await getContentDna(client.supergrow_workspace_id, client.supergrow_api_key); } catch (_) {}
+  const algorithmBrief = getCurrentBrief();
 
-    const generated = await generatePosts(client, () => {}, contentDna, algorithmBrief, count, existingTopics);
-    // Give every new post a fresh id so its image R2 key can't collide with an
-    // existing post's. Posts are addressed by index in the UI, so appending is safe.
-    let newPosts = (generated.posts || []).map(p => ({ ...p, id: p.id || uuid() }));
+  // 1) Write the new post text. Give each a fresh id so image keys can't collide.
+  const generated = await generatePosts(client, () => {}, contentDna, algorithmBrief, count, existingTopics);
+  const newPosts = (generated.posts || []).map(p => ({ ...p, id: p.id || uuid(), image_url: null }));
+  const addTotal = newPosts.length;
 
-    if (includeImages) {
-      // gpt-image-2 tolerates a faster cadence than Gemini's free tier.
-      const delay = client.image_engine === 'gpt_image' ? 1000 : 7000;
-      for (let i = 0; i < newPosts.length; i++) {
-        const post = newPosts[i];
-        try {
-          const imageData = await generateImage(
-            post.image_prompt || `Professional LinkedIn image for: ${post.topic}`,
-            client,
-            post
-          );
-          const imageUrl = await uploadImageToR2(imageData.data, imageData.mimeType, client.id, post.id);
-          let preLogoUrl = null;
-          if (imageData.preLogoData) {
-            try {
-              preLogoUrl = await uploadImageToR2(imageData.preLogoData, imageData.preLogoMime, client.id, `${post.id}-prelogo`);
-            } catch (e) {
-              console.warn(`[campaigns] add-posts pre-logo upload failed (non-fatal): ${e.message}`);
-            }
+  // Append immediately so the new cards show right away (as "Generating…" if
+  // images are still to come), then let the frontend load the combined set.
+  const combined = existing.concat(newPosts);
+  const baseIndex = existing.length;
+  updateCampaign(campaign.id, {
+    posts_json: JSON.stringify(combined),
+    posts_generated: combined.length,
+    total_posts: combined.length,
+    add_total: addTotal,
+    add_done: includeImages ? 0 : addTotal,
+  });
+  sendSSE(campaign.id, { type: 'status', campaign: withLogoDefaults(db.prepare('SELECT * FROM campaigns WHERE id = ?').get(campaign.id)) });
+  sendSSE(campaign.id, { type: 'progress', add_status: 'running', add_total: addTotal, add_done: includeImages ? 0 : addTotal });
+
+  // 2) Images, one at a time — bump the bar and fill each card in as it lands.
+  if (includeImages) {
+    const delay = client.image_engine === 'gpt_image' ? 1000 : 7000;
+    for (let i = 0; i < newPosts.length; i++) {
+      const post = newPosts[i];
+      let finalPost;
+      try {
+        const imageData = await generateImage(
+          post.image_prompt || `Professional LinkedIn image for: ${post.topic}`,
+          client,
+          post
+        );
+        const imageUrl = await uploadImageToR2(imageData.data, imageData.mimeType, client.id, post.id);
+        let preLogoUrl = null;
+        if (imageData.preLogoData) {
+          try {
+            preLogoUrl = await uploadImageToR2(imageData.preLogoData, imageData.preLogoMime, client.id, `${post.id}-prelogo`);
+          } catch (e) {
+            console.warn(`[campaigns] add-posts pre-logo upload failed (non-fatal): ${e.message}`);
           }
-          newPosts[i] = { ...post, image_url: imageUrl, pre_logo_image_url: preLogoUrl };
-        } catch (err) {
-          console.error(`[campaigns] add-posts image failed:`, err.message);
-          newPosts[i] = { ...post, image_url: null, image_error: err.message };
         }
-        if (i < newPosts.length - 1) await sleep(delay);
+        finalPost = { ...post, image_url: imageUrl, pre_logo_image_url: preLogoUrl };
+      } catch (err) {
+        console.error('[campaigns] add-posts image failed:', err.message);
+        finalPost = { ...post, image_url: null, image_error: err.message };
       }
-    } else {
-      newPosts = newPosts.map(p => ({ ...p, image_url: null }));
+      combined[baseIndex + i] = finalPost;
+      const imagesGenerated = combined.filter(p => p.image_url).length;
+      updateCampaign(campaign.id, {
+        posts_json: JSON.stringify(combined),
+        images_generated: imagesGenerated,
+        add_done: i + 1,
+      });
+      sendSSE(campaign.id, { type: 'post_updated', postIndex: baseIndex + i, post: finalPost, message: `New post ${i + 1}/${addTotal} ready` });
+      sendSSE(campaign.id, { type: 'progress', add_status: 'running', add_done: i + 1, add_total: addTotal, images_generated: imagesGenerated });
+      if (i < newPosts.length - 1) await sleep(delay);
     }
-
-    const combined = existing.concat(newPosts);
-    const imagesGenerated = combined.filter(p => p.image_url).length;
-    updateCampaign(campaign.id, {
-      posts_json: JSON.stringify(combined),
-      posts_generated: combined.length,
-      total_posts: combined.length,
-      images_generated: imagesGenerated,
-    });
-
-    res.json({ ok: true, added: newPosts.length, total: combined.length });
-  } catch (err) {
-    console.error('[campaigns] add-posts failed:', err.message);
-    res.status(500).json({ error: err.message || 'Failed to add posts' });
   }
-});
+
+  // 3) Done — clear the flag; the campaign stays in review with the new posts.
+  updateCampaign(campaign.id, { add_status: null, add_done: addTotal, add_total: addTotal });
+  sendSSE(campaign.id, { type: 'progress', add_status: 'done', add_done: addTotal, add_total: addTotal });
+  sendSSE(campaign.id, { type: 'status', campaign: withLogoDefaults(db.prepare('SELECT * FROM campaigns WHERE id = ?').get(campaign.id)) });
+  sendSSE(campaign.id, { type: 'log', message: `Added ${addTotal} post${addTotal === 1 ? '' : 's'}.` });
+}
 
 // ─── Campaign pipeline ────────────────────────────────────────────────────────
 
