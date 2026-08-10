@@ -1733,10 +1733,79 @@ router.get('/campaigns/:id/recipients', (req, res) => {
 
 // ── EXPORTS ───────────────────────────────────────────────────────────────────
 
+// Turn an email address into a best-guess company label from its domain.
+// Recipients only carry name + email (no company field), so the domain is the
+// closest real signal — right ~90% of the time for B2B. Handles two-part TLDs
+// (co.uk, com.au …) so "x@a.co.uk" → "A", not "Co".
+function companyFromEmail(email) {
+  const domain = String(email || '').split('@')[1] || '';
+  if (!domain) return '';
+  const parts = domain.toLowerCase().split('.').filter(Boolean);
+  if (parts.length < 2) return '';
+  const TWO_PART_TLDS = ['co.uk','org.uk','ltd.uk','plc.uk','me.uk','com.au','net.au','org.au','co.nz','co.za','com.br','co.in'];
+  const lastTwo = parts.slice(-2).join('.');
+  const sld = (parts.length >= 3 && TWO_PART_TLDS.includes(lastTwo))
+    ? parts[parts.length - 3]
+    : parts[parts.length - 2];
+  if (!sld) return '';
+  return sld.charAt(0).toUpperCase() + sld.slice(1);
+}
+
+// Wrap a value as a safe CSV cell (quotes doubled, always quoted) so names,
+// URLs, commas and line breaks can't break the column layout.
+function csvCell(v) {
+  return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+}
+
 router.get('/campaigns/:id/export/:type', (req, res) => {
   const { type } = req.params;
   const campaign = db.prepare('SELECT * FROM email_campaigns WHERE id=?').get(req.params.id);
   if (!campaign) return res.status(404).json({ error: 'Not found' });
+
+  // ── Clickers → CSV with the engagement columns ──────────────────────────────
+  // One row per person who clicked (matches the campaign's "unique clickers"
+  // number). Columns: Name, Email, Number of clicks, Number of opens, Website(s)
+  // they clicked, Company (best-guess from the email domain). Clicks/opens are
+  // TOTAL events for that person, so a very high number is almost always a
+  // corporate mail-security scanner rather than a real reader.
+  if (type === 'clickers') {
+    const people = db.prepare(`
+      SELECT es.id AS sid, es.name AS name, es.email AS email,
+             esnd.click_count AS clicks, esnd.open_count AS opens
+      FROM email_sends esnd
+      JOIN email_subscribers es ON es.id = esnd.subscriber_id
+      WHERE esnd.campaign_id = ? AND esnd.clicked_at IS NOT NULL
+      ORDER BY esnd.click_count DESC, es.email ASC
+    `).all(req.params.id);
+
+    // Distinct websites each person clicked, grouped in JS so we control the
+    // separator and CSV-escaping (SQLite GROUP_CONCAT DISTINCT forces commas).
+    const urlRows = db.prepare(`
+      SELECT DISTINCT subscriber_id AS sid, url
+      FROM email_link_clicks
+      WHERE campaign_id = ?
+    `).all(req.params.id);
+    const urlsBySid = new Map();
+    for (const u of urlRows) {
+      if (!urlsBySid.has(u.sid)) urlsBySid.set(u.sid, []);
+      urlsBySid.get(u.sid).push(u.url);
+    }
+
+    const header = ['Name','Email','Number of clicks','Number of opens','Website','Company']
+      .map(csvCell).join(',') + '\n';
+    const body = people.map(p => [
+      p.name || '',
+      p.email || '',
+      p.clicks || 0,
+      p.opens || 0,
+      (urlsBySid.get(p.sid) || []).join(' | '),
+      companyFromEmail(p.email),
+    ].map(csvCell).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="clickers-${req.params.id}.csv"`);
+    return res.send(header + body);
+  }
 
   let rows = [];
   const header = 'Name,Email,Status\n';
@@ -1747,13 +1816,6 @@ router.get('/campaigns/:id/export/:type', (req, res) => {
       FROM email_subscribers es
       JOIN email_sends esnd ON esnd.subscriber_id=es.id
       WHERE esnd.campaign_id=? AND esnd.opened_at IS NOT NULL
-    `).all(req.params.id);
-  } else if (type === 'clickers') {
-    rows = db.prepare(`
-      SELECT DISTINCT es.name, es.email, 'Clicked' as status
-      FROM email_subscribers es
-      JOIN email_link_clicks elc ON elc.subscriber_id=es.id
-      WHERE elc.campaign_id=?
     `).all(req.params.id);
   } else if (type === 'non-openers') {
     rows = db.prepare(`

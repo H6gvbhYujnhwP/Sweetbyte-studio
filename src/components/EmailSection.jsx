@@ -1709,7 +1709,6 @@ function CampaignReport({campaign,lists,onBack}){
       a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
       a.download=`${type}-${campaign.id}.csv`;
       a.click();
-      URL.revokeObjectURL(a.href);
     }catch(e){alert('Export failed. Please refresh the page and try again.');}
   }
 
@@ -1854,14 +1853,13 @@ function CampaignReport({campaign,lists,onBack}){
         <div style={{padding:24,textAlign:'center',color:MUTED,fontSize:13}}>No link clicks recorded yet.</div>
       ):(
         <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr><TH>Link URL</TH><TH>Unique clicks</TH><TH>Total clicks</TH><TH>Actions</TH></tr></thead>
+          <thead><tr><TH>Link URL</TH><TH>Unique clicks</TH><TH>Total clicks</TH></tr></thead>
           <tbody>
             {report.link_clicks.map((lc,i)=>(
               <tr key={i}>
                 <TD><span style={{color:BLUE,fontSize:11,wordBreak:'break-all'}}>{lc.url}</span></TD>
                 <TD center><Badge label={lc.unique_clicks} color={BLUE} bg="#e6f1fb"/></TD>
                 <TD center>{lc.total_clicks}</TD>
-                <TD><Btn small>Export clickers</Btn></TD>
               </tr>
             ))}
           </tbody>
