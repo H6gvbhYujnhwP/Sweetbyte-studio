@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { SB } from '../brand.js';
 
 // StaffAccess — Studio staff accounts + per-section access (super-admin only).
 //
@@ -8,8 +9,8 @@ import React, { useState, useEffect } from 'react';
 // exactly once after create/reset — bcrypt on the server means there's no
 // "reveal existing password" path by design.
 
-const GREEN = '#1D9E75';
-const GREEN_DARK = '#0F6E56';
+const GREEN = SB.primary;
+const GREEN_DARK = SB.strong;
 const BG = '#f5f5f3';
 
 const card = { background: '#fff', border: '0.5px solid #e0e0dc', borderRadius: 10 };
@@ -54,7 +55,7 @@ export default function StaffAccess({ user }) {
 
   function accessSummary(u) {
     if (u.disabled) return { text: 'Disabled', color: '#A32D2D', bg: '#FCEBEB' };
-    if (u.is_super) return { text: 'Full admin', color: GREEN_DARK, bg: '#E1F5EE' };
+    if (u.is_super) return { text: 'Full admin', color: GREEN_DARK, bg: SB.tint };
     const n = Object.keys(u.access || {}).length;
     return { text: `${n} section${n === 1 ? '' : 's'}`, color: '#555', bg: '#f0f0ec' };
   }
@@ -86,7 +87,7 @@ export default function StaffAccess({ user }) {
           <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a' }}>{user ? user.username : 'You'} <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>— you</span></div>
           <div style={{ fontSize: 12, color: '#888' }}>Your master login. Full access, can never be locked out.</div>
         </div>
-        <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 8, background: '#E1F5EE', color: GREEN_DARK, fontWeight: 500 }}>Full admin</span>
+        <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 8, background: SB.tint, color: GREEN_DARK, fontWeight: 500 }}>Full admin</span>
       </div>
 
       {/* Staff table */}

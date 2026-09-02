@@ -17,8 +17,9 @@
 // fetch() works here). Live performance numbers are NOT shown yet — Phase B.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect } from 'react';
+import { SB } from '../brand.js';
 
-const GREEN='#1D9E75', GREEN_HI='#0F6E56', GREEN_BG='#E1F5EE';
+const GREEN=SB.primary, GREEN_HI=SB.strong, GREEN_BG=SB.tint;
 const TEXT='#1a1a1a', MUTED='#666', TERTIARY='#999', BORDER='#e0e0dc', BG='#f5f5f3', CARD='#ffffff';
 const BLUE='#185FA5', BLUE_BG='#E6F1FB';
 const AMBER='#854F0B', AMBER_BG='#FAEEDA';
@@ -227,7 +228,7 @@ function AddPixelModal({ available, onAdd, onClose }) {
         </div>
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:20 }}>
           <button onClick={onClose} style={{ background:'#fff', color:'#666', border:'1px solid #e0e0dc', borderRadius:6, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>Cancel</button>
-          <button onClick={submit} style={{ background:'#0F6E56', color:'#fff', border:'none', borderRadius:6, padding:'8px 16px', fontSize:13, fontWeight:500, cursor:'pointer' }}>Add customer</button>
+          <button onClick={submit} style={{ background:SB.strong, color:'#fff', border:'none', borderRadius:6, padding:'8px 16px', fontSize:13, fontWeight:500, cursor:'pointer' }}>Add customer</button>
         </div>
       </div>
     </div>

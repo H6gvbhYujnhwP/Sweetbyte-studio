@@ -13,14 +13,15 @@
 // from the LinkedIn side.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useRef } from 'react';
+import { SB } from '../brand.js';
 
-const GREEN_HI='#0F6E56', GREEN_BG='#E1F5EE';
+const GREEN_HI=SB.strong, GREEN_BG=SB.tint;
 const TEXT='#1a1a1a', MUTED='#666', TERTIARY='#999', BORDER='#e0e0dc', BG='#f5f5f3', CARD='#ffffff';
 const BLUE='#185FA5', BLUE_BG='#E6F1FB';
 const AMBER='#854F0B', AMBER_BG='#FAEEDA';
 const GREY='#5F5E5A', GREY_BG='#F1EFE8';
 const RED='#A32D2D', RED_BG='#FCEBEB';
-const GREEN='#1D9E75';
+const GREEN=SB.primary;
 
 const WINDOWS = [ {key:'7d',label:'Last 7 days'}, {key:'30d',label:'Last 30 days'}, {key:'lifetime',label:'Lifetime'} ];
 const cardStyle = { background:CARD, border:`1px solid ${BORDER}`, borderRadius:10, padding:'14px 16px' };

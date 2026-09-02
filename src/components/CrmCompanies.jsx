@@ -1,17 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { SB } from '../brand.js';
 
 // CrmCompanies — Sales CRM company list + profile (Phase 2, admin / TGA box).
 // Talks to /api/crm/companies. Self-contained: holds both the list view and
 // the single-company profile view, like the other admin screens.
 
-const GREEN = '#1D9E75';
-const GREEN_DARK = '#0F6E56';
+const GREEN = SB.primary;
+const GREEN_DARK = SB.strong;
 
 const STATUSES = [
   { key: 'suspect',      label: 'Suspect',      bg: '#F1EFE8', color: '#444441' },
   { key: 'prospect',     label: 'Prospect',     bg: '#E6F1FB', color: '#0C447C' },
   { key: 'hot_prospect', label: 'Hot prospect', bg: '#FAEEDA', color: '#854F0B' },
-  { key: 'customer',     label: 'Customer',     bg: '#E1F5EE', color: '#0F6E56' },
+  { key: 'customer',     label: 'Customer',     bg: SB.tint, color: SB.strong },
 ];
 const STATUS_MAP = Object.fromEntries(STATUSES.map(s => [s.key, s]));
 
@@ -379,7 +380,7 @@ function ContactsPanel({ contacts, onAdd, onEdit, onDelete }) {
           <tbody>
             {contacts.map(c => (
               <tr key={c.id} style={{ borderTop: '0.5px solid #eee' }}>
-                <td style={{ padding: '10px 8px', color: '#1a1a1a' }}>{c.name}{c.is_decision_maker ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: '#E1F5EE', color: GREEN_DARK, fontWeight: 500, marginLeft: 8 }}>Decision-maker</span> : null}</td>
+                <td style={{ padding: '10px 8px', color: '#1a1a1a' }}>{c.name}{c.is_decision_maker ? <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, background: SB.tint, color: GREEN_DARK, fontWeight: 500, marginLeft: 8 }}>Decision-maker</span> : null}</td>
                 <td style={{ padding: '10px 8px', color: '#666' }}>{c.role || '—'}</td>
                 <td style={{ padding: '10px 8px', color: '#666' }}>{c.email || '—'}</td>
                 <td style={{ padding: '10px 8px', color: '#666' }}>{c.phone || '—'}</td>
@@ -623,7 +624,7 @@ export function fmtMoney(n) {
 }
 const DEAL_STATUS = {
   open: { label: 'Open', bg: '#E6F1FB', color: '#0C447C' },
-  won:  { label: 'Won',  bg: '#E1F5EE', color: '#0F6E56' },
+  won:  { label: 'Won',  bg: SB.tint, color: SB.strong },
   lost: { label: 'Lost', bg: '#F1EFE8', color: '#777' },
 };
 export function DealStatusPill({ status }) {
@@ -745,7 +746,7 @@ const ORDER_STATUS = {
   approved:          { label: 'Approved',          bg: '#E6F1FB', color: '#0C447C' },
   rejected:          { label: 'Returned',          bg: '#FBE6E2', color: '#9E2A1E' },
   purchasing:        { label: 'Purchasing',        bg: '#EDE7F6', color: '#5B21B6' },
-  completed:         { label: 'Completed',         bg: '#E1F5EE', color: '#0F6E56' },
+  completed:         { label: 'Completed',         bg: SB.tint, color: SB.strong },
 };
 export function OrderStatusPill({ status }) {
   const m = ORDER_STATUS[status] || ORDER_STATUS.draft;

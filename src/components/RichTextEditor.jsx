@@ -28,7 +28,7 @@ const tools = [
 const fontSizes = ['10px','11px','12px','13px','14px','16px','18px','20px','24px','28px','32px'];
 const headings  = ['Normal','Heading 1','Heading 2','Heading 3'];
 
-// Email-safe fonts. Verdana is the default per The Green Agents house style —
+// Email-safe fonts. Verdana is the default per the Sweetbyte house style —
 // readable at small sizes, near-universal client support. Operator can switch
 // to any of the others via the toolbar.
 const fontFamilies = [

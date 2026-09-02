@@ -20,9 +20,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 // Brand colours — match the admin Studio for visual consistency.
-const TGA_GREEN     = '#0F6E56';
-const TGA_GREEN_HI  = '#14a37e';
-const TGA_GREEN_LO  = '#7fbfa1';
+// Sweetbyte palette (2026-09-02). Constant names kept for minimal diff:
+// TGA_GREEN = sidebar navy, TGA_GREEN_HI = primary cyan, TGA_GREEN_LO = muted.
+const TGA_GREEN     = '#0F1D3F';
+const TGA_GREEN_HI  = '#1EA4C9';
+const TGA_GREEN_LO  = '#B9CEDF';
 const TEXT          = '#1a1a1a';
 const MUTED         = '#5f5e5a';
 const TERTIARY_TEXT = '#888780';
@@ -32,8 +34,8 @@ const BG            = '#f5f5f3';
 const BLUE          = '#185FA5';
 const BLUE_BG       = '#E6F1FB';
 const DANGER        = '#A32D2D';
-const GREEN         = '#0F6E56';
-const GREEN_BG      = '#E1F5EE';
+const GREEN         = '#135AA0';  // strong blue — status text on tint
+const GREEN_BG      = '#E4F4FA';
 const AMBER         = '#854F0B';
 const AMBER_BG      = '#FAEEDA';
 
@@ -44,7 +46,7 @@ const AMBER_BG      = '#FAEEDA';
 
 const PORTAL_STATUS_OPTIONS = [
   { value: 'new',         label: 'New',         bg: '#E6F1FB', fg: '#0C447C' },
-  { value: 'contacted',   label: 'Contacted',   bg: '#E1F5EE', fg: '#0F6E56' },
+  { value: 'contacted',   label: 'Contacted',   bg: '#E4F4FA', fg: '#135AA0' },
   { value: 'no_response', label: 'No response', bg: '#F1EFE8', fg: '#5F5E5A' },
 ];
 
@@ -53,7 +55,7 @@ const PORTAL_TAG_COLORS = [
   { value: 'red',    label: 'Red',      bg: '#FAECE7', fg: '#793F1F' },
   { value: 'orange', label: 'Orange',   bg: '#FAEEDA', fg: '#854F0B' },
   { value: 'yellow', label: 'Yellow',   bg: '#FFF7C2', fg: '#5C4A05' },
-  { value: 'green',  label: 'Green',    bg: '#E1F5EE', fg: '#0F6E56' },
+  { value: 'green',  label: 'Green',    bg: '#E4F4FA', fg: '#135AA0' },
   { value: 'blue',   label: 'Blue',     bg: '#E6F1FB', fg: '#0C447C' },
   { value: 'purple', label: 'Purple',   bg: '#EEEDFE', fg: '#3C3489' },
   { value: 'pink',   label: 'Pink',     bg: '#FCE7F2', fg: '#83215E' },
@@ -267,7 +269,7 @@ function PortalLogin({ slug, onLogin }) {
             fontSize:16, fontWeight:500,
           }}>G</div>
           <div>
-            <div style={{ fontSize:18, fontWeight:500, color:TEXT }}>The Green Agents</div>
+            <div style={{ fontSize:18, fontWeight:500, color:TEXT }}>Sweetbyte</div>
             <div style={{ fontSize:12, color:MUTED, marginTop:2 }}>Studio · {clientName} portal</div>
           </div>
         </div>
@@ -291,7 +293,7 @@ function PortalLogin({ slug, onLogin }) {
 
         <button type="submit" disabled={busy} style={{
           width:'100%', padding:10, fontSize:13, fontWeight:500,
-          background: busy ? TGA_GREEN_LO : TGA_GREEN_HI, color:'white',
+          background: busy ? TGA_GREEN_LO : TGA_GREEN_HI, color:'#0F1D3F',
           border:'none', borderRadius:8, cursor: busy ? 'default' : 'pointer',
           marginTop:12,
         }}>{busy ? 'Signing in…' : 'Sign in'}</button>
@@ -419,7 +421,7 @@ function PortalResetPassword({ slug, token }) {
           }}>G</div>
           <div>
             <div style={{ fontSize:18, fontWeight:500, color:TEXT }}>Set a new password</div>
-            <div style={{ fontSize:12, color:MUTED, marginTop:2 }}>The Green Agents Studio portal</div>
+            <div style={{ fontSize:12, color:MUTED, marginTop:2 }}>Sweetbyte Studio portal</div>
           </div>
         </div>
 
@@ -433,7 +435,7 @@ function PortalResetPassword({ slug, token }) {
             </div>
             <button type="button" onClick={goToLogin} style={{
               width:'100%', padding:10, fontSize:13, fontWeight:500,
-              background: TGA_GREEN_HI, color:'white',
+              background: TGA_GREEN_HI, color:'#0F1D3F',
               border:'none', borderRadius:8, cursor:'pointer',
             }}>Go to sign in</button>
           </div>
@@ -450,7 +452,7 @@ function PortalResetPassword({ slug, token }) {
             {err && <div style={{ color:DANGER, fontSize:12, marginTop:6 }}>{err}</div>}
             <button type="submit" disabled={busy} style={{
               width:'100%', padding:10, fontSize:13, fontWeight:500,
-              background: busy ? TGA_GREEN_LO : TGA_GREEN_HI, color:'white',
+              background: busy ? TGA_GREEN_LO : TGA_GREEN_HI, color:'#0F1D3F',
               border:'none', borderRadius:8, cursor: busy ? 'default' : 'pointer',
               marginTop:12,
             }}>{busy ? 'Updating…' : 'Set new password'}</button>
@@ -573,12 +575,12 @@ function PortalChrome({ user, client, services, onLogout }) {
             display:'flex', alignItems:'center', justifyContent:'center',
             flexShrink:0, padding:3, boxSizing:'border-box',
           }}>
-            <img src="/tga-logo.png" alt="The Green Agents"
+            <img src="/sweetbyte-logo.png" alt="Sweetbyte"
               style={{ maxWidth:'100%', maxHeight:'100%', objectFit:'contain' }}
             />
           </div>
           <div style={{ minWidth:0 }}>
-            <div style={{ fontSize:13, fontWeight:500, color:'white', lineHeight:1.2 }}>The Green Agents</div>
+            <div style={{ fontSize:13, fontWeight:500, color:'white', lineHeight:1.2 }}>Sweetbyte</div>
             <div style={{ fontSize:11, color:TGA_GREEN_LO, marginTop:2 }}>Studio</div>
           </div>
         </div>
@@ -842,7 +844,7 @@ function NavItem({ label, active, onClick, dim, suffix, badge, unreadBadge }) {
         background: active ? 'rgba(255,255,255,0.1)' : (hover ? 'rgba(255,255,255,0.04)' : 'transparent'),
         // Left accent bar — matches the admin sidebar style. Always 2px so
         // hover/active don't change layout, just colour.
-        borderLeft: active ? '2px solid #9FE1CB' : '2px solid transparent',
+        borderLeft: active ? '2px solid #1EA4C9' : '2px solid transparent',
         borderTop:'none', borderRight:'none', borderBottom:'none',
         color: active ? '#fff' : (dim ? 'rgba(255,255,255,0.4)' : TGA_GREEN_LO),
         fontSize:12.5, textAlign:'left', cursor:'pointer', userSelect:'none',
@@ -855,7 +857,7 @@ function NavItem({ label, active, onClick, dim, suffix, badge, unreadBadge }) {
           (unread = "look at this", urgent = "act now") and a row can be both. */}
       {unreadBadge > 0 && (
         <span style={{
-          background:'#0F6E56', color:'#fff', fontSize:10, fontWeight:600,
+          background:'#135AA0', color:'#fff', fontSize:10, fontWeight:600,
           padding:'1px 6px', borderRadius:8, minWidth:14, textAlign:'center',
           lineHeight:1.4,
         }}>{unreadBadge}</span>
@@ -1071,7 +1073,7 @@ function RefinePostsModal({ onClose }) {
             }}>Cancel</button>
             <button onClick={save} disabled={busy || rules === null} style={{
               padding:'8px 16px', fontSize:12, fontWeight:500,
-              background:(busy || rules === null) ? '#9FE1CB' : GREEN, color:'#fff',
+              background:(busy || rules === null) ? '#A9DEF0' : GREEN, color:'#fff',
               border:'none', borderRadius:6, cursor:(busy || rules === null)?'default':'pointer',
             }}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
@@ -1484,7 +1486,7 @@ function PortalPosts() {
         {!allApproved && (
           <button onClick={approveAllRemaining} disabled={bulkBusy} style={{
             marginLeft:'auto', padding:'6px 12px',
-            background: bulkBusy ? TGA_GREEN_LO : TGA_GREEN_HI, color:'white',
+            background: bulkBusy ? TGA_GREEN_LO : TGA_GREEN_HI, color:'#0F1D3F',
             border:'none', borderRadius:6, fontSize:12,
             cursor: bulkBusy ? 'not-allowed' : 'pointer', fontWeight:500,
           }}>{bulkBusy ? 'Sending to LinkedIn…' : 'Approve all remaining'}</button>
@@ -2572,7 +2574,7 @@ function ReplyDetailModal({ reply: replyProp, onClose, onCompose, onNavigateToCr
           {subResubStatus && (
             <div style={{
               marginTop:8, fontSize:12,
-              color: subResubStatus.kind === 'success' ? '#085041'
+              color: subResubStatus.kind === 'success' ? '#0F2E5C'
                    : subResubStatus.kind === 'error'   ? '#a73a30'
                    : '#5F5E5A',
               fontStyle: subResubStatus.kind === 'info' ? 'italic' : 'normal',
@@ -2598,7 +2600,7 @@ function ReplyDetailModal({ reply: replyProp, onClose, onCompose, onNavigateToCr
               background: hotProspectBanner.kind === 'added' ? GREEN_BG : BLUE_BG,
               borderLeft: `3px solid ${hotProspectBanner.kind === 'added' ? TGA_GREEN_HI : BLUE}`,
               borderRadius:6, padding:'8px 12px', marginBottom:14,
-              fontSize:12, color: hotProspectBanner.kind === 'added' ? '#085041' : '#0C447C',
+              fontSize:12, color: hotProspectBanner.kind === 'added' ? '#0F2E5C' : '#0C447C',
               lineHeight:1.5,
               display:'flex', alignItems:'center', justifyContent:'space-between', gap:10,
             }}>
@@ -2878,7 +2880,7 @@ function PortalFollowUpPanel({ counts }) {
 // inlined here so PortalApp.jsx stays standalone (no cross-import to an admin
 // component, which lives outside the customer-portal subtree).
 const PORTAL_AVATAR_PALETTE = [
-  { bg: '#E1F5EE', fg: '#085041' },
+  { bg: '#E4F4FA', fg: '#0F2E5C' },
   { bg: '#FAECE7', fg: '#712B13' },
   { bg: '#EEEDFE', fg: '#3C3489' },
   { bg: '#FBEAF0', fg: '#72243E' },
@@ -3371,7 +3373,7 @@ function PortalProspectDetailBody({ data, followUp, setFollowUp, notes, setNotes
       {/* Converted banner — only when the prospect is closed. */}
       {isConverted && (
         <div style={{
-          background: GREEN_BG, border:`0.5px solid #9FE1CB`,
+          background: GREEN_BG, border:`0.5px solid #A9DEF0`,
           borderRadius:8, padding:'10px 14px', marginBottom:14,
           fontSize:13, color: GREEN,
         }}>
@@ -3489,7 +3491,7 @@ function PortalProspectDetailBody({ data, followUp, setFollowUp, notes, setNotes
       {resubStatus && (
         <div style={{
           marginBottom:12, fontSize:12,
-          color: resubStatus.kind === 'success' ? '#085041'
+          color: resubStatus.kind === 'success' ? '#0F2E5C'
                : resubStatus.kind === 'error'   ? DANGER
                : '#5F5E5A',
           fontStyle: resubStatus.kind === 'info' ? 'italic' : 'normal',
@@ -3531,7 +3533,7 @@ function PortalProspectDetailBody({ data, followUp, setFollowUp, notes, setNotes
       {unsubStatus && (
         <div style={{
           marginBottom:12, fontSize:12,
-          color: unsubStatus.kind === 'success' ? '#085041'
+          color: unsubStatus.kind === 'success' ? '#0F2E5C'
                : unsubStatus.kind === 'error'   ? DANGER
                : '#5F5E5A',
           fontStyle: unsubStatus.kind === 'info' ? 'italic' : 'normal',
@@ -3560,7 +3562,7 @@ function PortalProspectDetailBody({ data, followUp, setFollowUp, notes, setNotes
           <div style={{ fontSize:14, color:TEXT }}>
             {portalRelativeTime(p.added_at)}
             <span style={{ color:MUTED, marginLeft:6, fontSize:12 }}>
-              ({(p.added_by || '').startsWith('portal:') ? 'by you' : 'by The Green Agents'})
+              ({(p.added_by || '').startsWith('portal:') ? 'by you' : 'by Sweetbyte'})
             </span>
           </div>
         </div>
@@ -4845,7 +4847,7 @@ const FA_WINDOWS = [ {key:'7d',label:'Last 7 days'}, {key:'30d',label:'Last 30 d
 
 function faStatusPill(eff, status) {
   const s = (eff || status || '').toUpperCase();
-  if (s === 'ACTIVE') return { label:'Active', fg:'#0F6E56', bg:'#E1F5EE' };
+  if (s === 'ACTIVE') return { label:'Active', fg:'#135AA0', bg:'#E4F4FA' };
   if (s === 'PAUSED' || s === 'ADSET_PAUSED' || s === 'CAMPAIGN_PAUSED') return { label:'Paused', fg:'#854F0B', bg:'#FAEEDA' };
   if (s === 'IN_PROCESS' || s === 'PENDING_REVIEW') return { label:'In review', fg:'#185FA5', bg:'#E6F1FB' };
   if (s === 'DISAPPROVED' || s === 'WITH_ISSUES' || s === 'ADSET_DISAPPROVED') return { label:'Has issues', fg:'#A32D2D', bg:'#FCEBEB' };
@@ -5031,14 +5033,14 @@ function PortalSettings({ user, client, services }) {
             <UserRow username={user.username} email={user.email || ''} role={user.role} isYou />
           </div>
           <div style={{ marginTop:12, fontSize:11, color:TERTIARY_TEXT }}>
-            Adding more users from this portal is coming soon. In the meantime, contact The Green Agents to add a teammate.
+            Adding more users from this portal is coming soon. In the meantime, contact Sweetbyte to add a teammate.
           </div>
         </SettingsCard>
       )}
 
       <SettingsCard title="Branding">
         <p style={{ fontSize:12, color:MUTED, margin:'0 0 12px' }}>
-          Your logo and audience profile are managed by The Green Agents. Contact us if you need them updated.
+          Your logo and audience profile are managed by Sweetbyte. Contact us if you need them updated.
         </p>
         <div style={{ display:'flex', alignItems:'center', gap:14, padding:'10px 12px', border:`0.5px solid ${BORDER}`, borderRadius:6 }}>
           {client?.logo_url ? (

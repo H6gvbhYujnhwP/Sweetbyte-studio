@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { SB } from '../brand.js';
 
 const STAGES = [
   { key: 'generating_posts',  label: 'Writing posts',  icon: '✍️' },
@@ -8,10 +9,10 @@ const STAGES = [
   { key: 'done',              label: 'Complete',       icon: '✅' },
 ];
 
-const GREEN  = '#1D9E75';
-const LIGHT  = '#E1F5EE';
-const BORDER = '#9FE1CB';
-const DARK   = '#085041';
+const GREEN  = SB.primary;
+const LIGHT  = SB.tint;
+const BORDER = SB.light;
+const DARK   = SB.dark;
 
 export default function CampaignProgress({ campaignId, onComplete }) {
   const [campaign, setCampaign]     = useState(null);
@@ -497,7 +498,7 @@ export default function CampaignProgress({ campaignId, onComplete }) {
                   disabled={deploying || adding}
                   style={{
                     flex: 1, minWidth: 220,
-                    background: (deploying || adding) ? '#9FE1CB' : GREEN, color: '#fff', border: 'none',
+                    background: (deploying || adding) ? SB.light : GREEN, color: '#fff', border: 'none',
                     padding: '11px 20px', borderRadius: 8, fontWeight: 600, fontSize: 13,
                     cursor: (deploying || adding) ? 'not-allowed' : 'pointer'
                   }}
@@ -532,7 +533,7 @@ export default function CampaignProgress({ campaignId, onComplete }) {
                 disabled={deploying}
                 style={{
                   marginTop: 13,
-                  background: deploying ? '#9FE1CB' : GREEN, color: '#fff', border: 'none',
+                  background: deploying ? SB.light : GREEN, color: '#fff', border: 'none',
                   padding: '10px 18px', borderRadius: 8, fontWeight: 600, fontSize: 13,
                   cursor: deploying ? 'not-allowed' : 'pointer'
                 }}
@@ -563,7 +564,7 @@ export default function CampaignProgress({ campaignId, onComplete }) {
                 disabled={deploying}
                 style={{
                   fontSize: 12, fontWeight: 500, padding: '6px 14px',
-                  background: deploying ? '#9FE1CB' : '#fff',
+                  background: deploying ? SB.light : '#fff',
                   color: DARK, border: `1px solid ${BORDER}`,
                   borderRadius: 7, cursor: deploying ? 'not-allowed' : 'pointer', flexShrink: 0
                 }}
@@ -792,12 +793,12 @@ export default function CampaignProgress({ campaignId, onComplete }) {
       )}
 
       {/* Log terminal */}
-      <div style={{ background: '#111', borderRadius: 10, padding: '14px 16px', fontFamily: '"Menlo","Monaco","Consolas",monospace', fontSize: 11.5, color: '#9FE1CB', maxHeight: 240, overflow: 'auto', border: '1px solid #2a2a2a' }}>
+      <div style={{ background: '#111', borderRadius: 10, padding: '14px 16px', fontFamily: '"Menlo","Monaco","Consolas",monospace', fontSize: 11.5, color: SB.light, maxHeight: 240, overflow: 'auto', border: '1px solid #2a2a2a' }}>
         <div style={{ color: '#444', marginBottom: 6, fontSize: 10, letterSpacing: '0.05em' }}>CAMPAIGN LOG</div>
         {logs.length === 0
           ? <div style={{ color: '#444' }}>Waiting for first update…</div>
           : logs.map((l, i) => (
-            <div key={i} style={{ marginBottom: 3, lineHeight: 1.5, color: l.startsWith('ERROR') ? '#F09595' : l.startsWith('✓') ? '#9FE1CB' : '#7a7a7a' }}>
+            <div key={i} style={{ marginBottom: 3, lineHeight: 1.5, color: l.startsWith('ERROR') ? '#F09595' : l.startsWith('✓') ? SB.light : '#7a7a7a' }}>
               <span style={{ color: '#333', userSelect: 'none' }}>{String(i + 1).padStart(2, '0')} </span>{l}
             </div>
           ))

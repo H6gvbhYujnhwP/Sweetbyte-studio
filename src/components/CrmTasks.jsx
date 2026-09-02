@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { PriorityPill, fmtDue } from './CrmCompanies.jsx';
+import { SB } from '../brand.js';
 
 // CrmTasks — the cross-company Tasks dashboard (sidebar → CRM → Tasks).
 // Talks to /api/crm/tasks. Open / Overdue / Completed views + an assignee
 // filter. Tasks are created on a company; here you work through and tick them.
 
-const GREEN_DARK = '#0F6E56';
+const GREEN_DARK = SB.strong;
 const card = { background: '#fff', border: '0.5px solid #e0e0dc', borderRadius: 10 };
 
 function Tab({ label, n, on, onClick }) {
