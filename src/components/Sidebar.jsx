@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { SB, BRAND_NAME } from '../brand.js';
 
-const SECTION = { padding:'10px 16px 4px', fontSize:10, fontWeight:700, color:'rgba(255,255,255,0.55)', letterSpacing:'0.08em', textTransform:'uppercase' };
+const SECTION = { padding:'10px 16px 4px', fontSize:10, fontWeight:700, color:SB.sidebarHeading, letterSpacing:'0.08em', textTransform:'uppercase' };
 const DIVIDER = { margin:'6px 16px 2px', borderTop:'0.5px solid rgba(255,255,255,0.1)', border:'none' };
 
 export default function Sidebar({ onLogout, activeView, onNavigate, user }) {
@@ -62,20 +63,20 @@ export default function Sidebar({ onLogout, activeView, onNavigate, user }) {
   }, []);
 
   return (
-    <div style={{ width:210, background:'#0F6E56', display:'flex', flexDirection:'column', flexShrink:0 }}>
+    <div style={{ width:210, background:SB.sidebarBg, display:'flex', flexDirection:'column', flexShrink:0 }}>
 
-      {/* Logo — the green A-leaf mark on a white tile, mirrored exactly in the
-          customer portal sidebar (PortalApp.jsx) so admin and portal look
-          identical at the top-left. Image lives at /tga-logo.png in /public. */}
+      {/* Logo — the Sweetbyte spiral mark on a white tile, mirrored exactly in
+          the customer portal sidebar (PortalApp.jsx) so admin and portal look
+          identical at the top-left. Image lives at /sweetbyte-logo.png. */}
       <div style={{ padding:'16px 14px', borderBottom:'0.5px solid rgba(255,255,255,0.1)', display:'flex', alignItems:'center', gap:10 }}>
         <div style={{ width:30, height:30, background:'#fff', borderRadius:7, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, padding:3, boxSizing:'border-box' }}>
-          <img src="/tga-logo.png" alt="The Green Agents"
+          <img src="/sweetbyte-logo.png" alt={BRAND_NAME}
             style={{ maxWidth:'100%', maxHeight:'100%', objectFit:'contain' }}
           />
         </div>
         <div>
-          <div style={{ color:'#fff', fontSize:13, fontWeight:500, lineHeight:1.2 }}>The Green Agents</div>
-          <div style={{ color:'#9FE1CB', fontSize:11 }}>Studio</div>
+          <div style={{ color:'#fff', fontSize:13, fontWeight:500, lineHeight:1.2 }}>{BRAND_NAME}</div>
+          <div style={{ color:SB.sidebarText, fontSize:11 }}>Studio</div>
         </div>
       </div>
 
@@ -138,7 +139,7 @@ export default function Sidebar({ onLogout, activeView, onNavigate, user }) {
       </div>
 
       <div style={{ padding:'14px 16px', borderTop:'0.5px solid rgba(255,255,255,0.1)' }}>
-        <button onClick={onLogout} style={{ background:'transparent', border:'none', color:'#9FE1CB', fontSize:12, padding:0, cursor:'pointer' }}>
+        <button onClick={onLogout} style={{ background:'transparent', border:'none', color:SB.sidebarText, fontSize:12, padding:0, cursor:'pointer' }}>
           Sign out
         </button>
       </div>
@@ -150,9 +151,9 @@ function NavItem({ id, label, active, onNavigate, icon, dim, suffix }) {
   return (
     <button onClick={()=>onNavigate(id)} style={{
       display:'flex', alignItems:'center', gap:9, width:'100%',
-      padding:'8px 16px', background:active?'rgba(255,255,255,0.12)':'transparent',
+      padding:'8px 16px', background:active?SB.primary:'transparent',
       border:'none',
-      color:active?'#fff':(dim?'rgba(255,255,255,0.45)':'#9FE1CB'),
+      color:active?SB.onPrimary:(dim?'rgba(255,255,255,0.45)':SB.sidebarText),
       fontSize:12, textAlign:'left', cursor:'pointer'
     }}>
       {icon}<span style={{flex:1}}>{label}</span>
@@ -165,15 +166,15 @@ function SubItem({ id, label, active, onNavigate, icon, badge, badgeUrgent }) {
   // badgeUrgent uses the danger-red colour to signal "needs attention" (used
   // by Hot Prospects for overdue + due-today follow-ups). Default badge style
   // is the original calm green (used by Mailboxes for new-prospect counts).
-  const badgeBg = badgeUrgent ? '#A32D2D' : '#1D9E75';
+  const badgeBg = badgeUrgent ? '#A32D2D' : SB.primary;
   return (
     <button onClick={()=>onNavigate(id)} style={{
       display:'flex', alignItems:'center', gap:9, width:'100%',
       padding:'6px 16px 6px 32px',
-      background:active?'rgba(255,255,255,0.1)':'transparent',
-      borderLeft:active?'2px solid #9FE1CB':'2px solid transparent',
+      background:active?SB.sidebarHover:'transparent',
+      borderLeft:active?('2px solid '+SB.primary):'2px solid transparent',
       borderTop:'none', borderRight:'none', borderBottom:'none',
-      color:active?'#fff':'rgba(255,255,255,0.65)', fontSize:11, textAlign:'left', cursor:'pointer'
+      color:active?'#fff':SB.sidebarText, fontSize:11, textAlign:'left', cursor:'pointer'
     }}>
       {icon}<span style={{flex:1}}>{label}</span>
       {badge>0 && <span style={{ background:badgeBg, color:'#fff', fontSize:10, fontWeight:600, padding:'1px 6px', borderRadius:8, minWidth:14, textAlign:'center', lineHeight:1.4 }}>{badge}</span>}
