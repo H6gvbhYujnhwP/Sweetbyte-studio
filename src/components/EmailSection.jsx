@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import RichTextEditor from './RichTextEditor.jsx';
+import { SB } from '../brand.js';
 
-const GREEN='#1D9E75',DARK='#0F6E56',BG='#f5f5f3',CARD='#fff',BORDER='#e0e0dc',TEXT='#1a1a1a',MUTED='#888',DANGER='#c0392b',AMBER='#854F0B',BLUE='#185FA5';
-const BRAND_COLORS=['#1D9E75','#0F6E56','#534AB7','#185FA5','#993C1D','#854F0B','#3B6D11','#D4537E','#5F5E5A'];
+const GREEN=SB.primary,DARK=SB.strong,BG='#f5f5f3',CARD='#fff',BORDER='#e0e0dc',TEXT='#1a1a1a',MUTED='#888',DANGER='#c0392b',AMBER='#854F0B',BLUE='#185FA5';
+const BRAND_COLORS=[SB.primary,SB.strong,'#534AB7','#185FA5','#993C1D','#854F0B','#3B6D11','#D4537E','#5F5E5A'];
 function initials(n=''){return n.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)||'?';}
 
 function Btn({children,onClick,variant='default',small,disabled,style={}}){
@@ -63,7 +64,7 @@ function Modal({title,children,onClose,wide}){
 function touchBadge(n){
   if(!n||n===0) return <Badge label="1st contact" color="#444441" bg="#F1EFE8"/>;
   if(n===1)     return <Badge label="2nd contact" color="#633806" bg="#FAEEDA"/>;
-  return        <Badge label={`${n+1}${suffix(n+1)} contact`} color="#085041" bg="#E1F5EE"/>;
+  return        <Badge label={`${n+1}${suffix(n+1)} contact`} color={SB.dark} bg={SB.tint}/>;
 }
 function suffix(n){const s=['th','st','nd','rd'],v=n%100;return s[(v-20)%10]||s[v]||s[0];}
 
@@ -465,7 +466,7 @@ const TD=({children,muted,center})=><td style={{padding:'9px 14px',fontSize:12,c
 function ClientModal({initial,onClose,onSaved,onRemove}){
   const editing=!!initial?.id;
   const [name,setName]=useState(initial?.name||'');
-  const [color,setColor]=useState(initial?.color||'#1D9E75');
+  const [color,setColor]=useState(initial?.color||SB.primary);
   // Default sender — set once per client, auto-populates new campaigns and lists
   const [defaultFromEmail,setDefaultFromEmail]=useState(initial?.default_from_email||'');
   const [defaultFromName,setDefaultFromName]=useState(initial?.default_from_name||'');
@@ -1594,7 +1595,7 @@ function firstNameSourceBadge(r){
   if (!r.first_name_source)     return <Badge label="Not parsed yet"   color={MUTED}    bg="#F1EFE8"/>;
   if (r.first_name_source==='rule')   return <Badge label="Parsed by rule"   color="#0C447C" bg="#E6F1FB"/>;
   if (r.first_name_source==='ai')     return <Badge label="Parsed by AI"     color="#3C3489" bg="#EEEDFE"/>;
-  if (r.first_name_source==='manual') return <Badge label="Manual override"  color="#085041" bg="#E1F5EE"/>;
+  if (r.first_name_source==='manual') return <Badge label="Manual override"  color={SB.dark} bg={SB.tint}/>;
   return <Badge label={r.first_name_source||'Unknown'} color={MUTED} bg="#F1EFE8"/>;
 }
 
@@ -1607,7 +1608,7 @@ function renderHighlighted(text, firstName, isSkipped){
   // already been substituted), so we just bold the first-name occurrences.
   const parts = text.split(new RegExp(`(${escapeRegex(firstName)})`, 'g'));
   return parts.map((p, i) => p === firstName
-    ? <span key={i} style={{background:'#E1F5EE',color:'#085041',padding:'1px 4px',borderRadius:3,fontWeight:500}}>{p}</span>
+    ? <span key={i} style={{background:SB.tint,color:SB.dark,padding:'1px 4px',borderRadius:3,fontWeight:500}}>{p}</span>
     : <span key={i}>{p}</span>
   );
 }
@@ -1619,7 +1620,7 @@ function htmlWithHighlight(html, firstName, isSkipped){
   if (!html) return '';
   if (isSkipped || !firstName) return html;
   const re = new RegExp(`(?<![<>=&\\w])(${escapeRegex(firstName)})(?![<>\\w])`, 'g');
-  return html.replace(re, '<span style="background:#E1F5EE;color:#085041;padding:1px 4px;border-radius:3px;font-weight:500;">$1</span>');
+  return html.replace(re, `<span style="background:${SB.tint};color:${SB.dark};padding:1px 4px;border-radius:3px;font-weight:500;">$1</span>`);
 }
 
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -2562,7 +2563,7 @@ export default function EmailSection({initialTab='customers'}){
     const existingNames=current.map(cl=>cl.name.toLowerCase());
     const toCreate=vds.filter(d=>!existingNames.includes(d.toLowerCase()));
     if(toCreate.length>0){
-      await Promise.all(toCreate.map(domain=>fetch('/api/email/clients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:domain,color:'#1D9E75'})})));
+      await Promise.all(toCreate.map(domain=>fetch('/api/email/clients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:domain,color:SB.primary})})));
       const refreshed=await fetch('/api/email/clients').then(r=>r.json());
       current=Array.isArray(refreshed)?refreshed:[];
     }
@@ -2717,7 +2718,7 @@ function classifyBadge(reply){
   //    see isFormspreeLeadRow in formspree-flagger.js) so this badge can never
   //    drift from the auto-flagger via a stale local keyword copy.
   if (reply?.is_website_prospect) {
-    return <Badge label="Website Prospect" color="#0F6E56" bg="#E1F5EE"/>;
+    return <Badge label="Website Prospect" color={SB.strong} bg={SB.tint}/>;
   }
 
   const inCampaign = !!reply.campaign_title;
@@ -3480,7 +3481,7 @@ function ReplyDetailModal({replyId, onClose, onAction}){
           {subResubStatus && (
             <div style={{
               marginTop:8, fontSize:12,
-              color: subResubStatus.kind === 'success' ? '#085041' : '#5F5E5A',
+              color: subResubStatus.kind === 'success' ? SB.dark : '#5F5E5A',
               fontStyle: subResubStatus.kind === 'info' ? 'italic' : 'normal',
             }}>{subResubStatus.text}</div>
           )}
@@ -3517,10 +3518,10 @@ function ReplyDetailModal({replyId, onClose, onAction}){
           {/* Hot Prospects banner — shown after a click on "Send to Hot Prospects". */}
           {hotProspectBanner && (
             <div style={{
-              background: hotProspectBanner.kind === 'added' ? '#E1F5EE' : '#E6F1FB',
+              background: hotProspectBanner.kind === 'added' ? SB.tint : '#E6F1FB',
               borderLeft: `3px solid ${hotProspectBanner.kind === 'added' ? GREEN : BLUE}`,
               borderRadius:6, padding:'8px 12px', marginBottom:12,
-              fontSize:12, color: hotProspectBanner.kind === 'added' ? '#085041' : '#0C447C',
+              fontSize:12, color: hotProspectBanner.kind === 'added' ? SB.dark : '#0C447C',
               lineHeight:1.5,
               display:'flex', alignItems:'center', justifyContent:'space-between', gap:10,
             }}>

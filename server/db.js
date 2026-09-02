@@ -141,7 +141,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS email_clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    color TEXT DEFAULT '#1D9E75',
+    color TEXT DEFAULT '#1EA4C9',
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -152,7 +152,7 @@ db.exec(`
     from_name TEXT NOT NULL,
     from_email TEXT NOT NULL,
     reply_to TEXT NOT NULL,
-    color TEXT DEFAULT '#1D9E75',
+    color TEXT DEFAULT '#1EA4C9',
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (email_client_id) REFERENCES email_clients(id)
   );
@@ -228,7 +228,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS email_clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    color TEXT DEFAULT '#1D9E75',
+    color TEXT DEFAULT '#1EA4C9',
     created_at TEXT DEFAULT (datetime('now'))
   );
 `);

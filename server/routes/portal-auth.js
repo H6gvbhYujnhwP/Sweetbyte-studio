@@ -450,30 +450,30 @@ router.post('/auth/forgot-password', async (req, res) => {
   const html = `
     <p>Hi${user.username ? ' ' + user.username : ''},</p>
     <p>Someone (hopefully you) asked to reset the password on your
-      ${client.name} portal at The Green Agents.</p>
-    <p><a href="${resetUrl}" style="display:inline-block;padding:10px 18px;background:#14a37e;color:#ffffff;text-decoration:none;border-radius:6px;">Reset your password</a></p>
+      ${client.name} portal at Sweetbyte.</p>
+    <p><a href="${resetUrl}" style="display:inline-block;padding:10px 18px;background:#1EA4C9;color:#0F1D3F;text-decoration:none;border-radius:6px;">Reset your password</a></p>
     <p>Or paste this link into your browser:<br>
       <span style="font-family:monospace;font-size:12px;color:#5f5e5a;">${resetUrl}</span></p>
     <p>The link is valid for 1 hour. If you didn't request a reset, ignore this email — your password won't change.</p>
-    <p style="color:#888;font-size:12px;margin-top:24px;">— The Green Agents</p>
+    <p style="color:#888;font-size:12px;margin-top:24px;">— Sweetbyte</p>
   `;
   const text =
 `Hi${user.username ? ' ' + user.username : ''},
 
-Someone (hopefully you) asked to reset the password on your ${client.name} portal at The Green Agents.
+Someone (hopefully you) asked to reset the password on your ${client.name} portal at Sweetbyte.
 
 Reset your password:
 ${resetUrl}
 
 The link is valid for 1 hour. If you didn't request a reset, ignore this email — your password won't change.
 
-— The Green Agents`;
+— Sweetbyte`;
 
   try {
     await sendEmail({
       to:        user.email,
       toName:    user.username,
-      fromName:  'The Green Agents Studio',
+      fromName:  'Sweetbyte Studio',
       fromEmail: PASSWORD_RESET_FROM,
       replyTo:   PASSWORD_RESET_FROM,
       subject,

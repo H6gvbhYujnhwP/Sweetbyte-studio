@@ -27,6 +27,7 @@ import { recompositeLogoFromUrl } from '../services/gemini.js';
 import { uploadImageToR2 } from '../services/r2.js';
 import { normalizeCta } from '../services/facebook-ads-playbook.js';
 import { generateAdCreatives, regenerateAdCopy, regenerateAdImage } from '../services/facebook-ads-gen.js';
+import { DEFAULT_CLIENT_COLOR } from '../../src/brand.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -204,7 +205,7 @@ router.post('/add-customer', (req, res) => {
         ? db._portalUniqueSlug(name, id)
         : name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
       db.prepare('INSERT INTO email_clients (id, name, color, slug, source) VALUES (?, ?, ?, ?, ?)')
-        .run(id, name, '#1D9E75', slug, 'manual');
+        .run(id, name, DEFAULT_CLIENT_COLOR, slug, 'manual');
     }
   } else {
     const ec = db.prepare('SELECT id FROM email_clients WHERE id = ?').get(id);

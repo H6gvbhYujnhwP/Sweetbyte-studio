@@ -1,7 +1,8 @@
 import React from 'react';
+import { SB } from '../brand.js';
 
 const STATUS_CONFIG = {
-  completed: { label: 'Deployed', bg: '#E1F5EE', color: '#085041', dot: '#1D9E75' },
+  completed: { label: 'Deployed', bg: SB.tint, color: SB.dark, dot: SB.primary },
   running:   { label: 'Generating...', bg: '#FAEEDA', color: '#633806', dot: '#EF9F27' },
   failed:    { label: 'Failed', bg: '#FCEBEB', color: '#501313', dot: '#E24B4A' },
   pending:   { label: 'Queued', bg: '#E6F1FB', color: '#0C447C', dot: '#378ADD' },
@@ -56,7 +57,7 @@ export default function ClientCard({ client, onClick }) {
         </div>
 
         <div style={{ height:3, background:'#f0f0ec', borderRadius:2 }}>
-          <div style={{ height:'100%', width:`${progress}%`, background:'#1D9E75', borderRadius:2, transition:'width 0.3s' }} />
+          <div style={{ height:'100%', width:`${progress}%`, background:SB.primary, borderRadius:2, transition:'width 0.3s' }} />
         </div>
       </div>
     </div>

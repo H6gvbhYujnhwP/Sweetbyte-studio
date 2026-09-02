@@ -14,6 +14,7 @@ import { isFormspreeLeadRow } from '../services/formspree-flagger.js';
 import { resolveLinkedSet, resolveCrmCustomerId, buildSubscriptionsPanel, applySubscriptionsUpdate } from './hot-prospects.js';
 import dns from 'dns';
 import { promisify } from 'util';
+import { DEFAULT_CLIENT_COLOR } from '../../src/brand.js';
 
 const router  = express.Router();
 const resolve = promisify(dns.resolveTxt);
@@ -600,7 +601,7 @@ router.post('/clients', async (req, res) => {
   }
 
   db.prepare('INSERT INTO email_clients (id,name,color,slug,source) VALUES (?,?,?,?,?)')
-    .run(id, name.trim(), color || '#1D9E75', slug, source);
+    .run(id, name.trim(), color || DEFAULT_CLIENT_COLOR, slug, source);
   res.json(db.prepare('SELECT * FROM email_clients WHERE id=?').get(id));
 });
 
@@ -698,7 +699,7 @@ router.post('/brands', (req, res) => {
   }
   const id = uuid();
   db.prepare('INSERT INTO email_brands (id,email_client_id,name,from_name,from_email,reply_to,color) VALUES (?,?,?,?,?,?,?)')
-    .run(id, email_client_id, name, from_name, from_email, reply_to || from_email, color || '#1D9E75');
+    .run(id, email_client_id, name, from_name, from_email, reply_to || from_email, color || DEFAULT_CLIENT_COLOR);
   res.json(db.prepare('SELECT * FROM email_brands WHERE id=?').get(id));
 });
 

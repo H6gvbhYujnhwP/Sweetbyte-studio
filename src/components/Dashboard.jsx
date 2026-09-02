@@ -14,6 +14,7 @@ import CrmCompanies from './CrmCompanies.jsx';
 import CrmTasks from './CrmTasks.jsx';
 import CrmDeals from './CrmDeals.jsx';
 import CrmOrders from './CrmOrders.jsx';
+import { SB } from '../brand.js';
 
 // Which section the operator is on is remembered across a browser refresh.
 // We store the current top-level view and read it back on first load, so a
@@ -367,15 +368,15 @@ export default function Dashboard({ onLogout, user }) {
               disabled={briefRunning}
               title={briefUpdatedAt ? `Last updated: ${new Date(briefUpdatedAt).toLocaleString('en-GB')}` : 'No brief yet — click to run'}
               style={{
-                background: briefRunning ? '#f0f0ec' : brief ? '#E1F5EE' : '#fff',
-                color: briefRunning ? '#999' : brief ? '#085041' : '#555',
-                border: `0.5px solid ${brief ? '#9FE1CB' : '#d0d0cc'}`,
+                background: briefRunning ? '#f0f0ec' : brief ? SB.tint : '#fff',
+                color: briefRunning ? '#999' : brief ? SB.dark : '#555',
+                border: `0.5px solid ${brief ? SB.light : '#d0d0cc'}`,
                 padding:'8px 14px', borderRadius:8, fontWeight:500, cursor: briefRunning ? 'not-allowed' : 'pointer',
                 fontSize:13, display:'flex', alignItems:'center', gap:6
               }}
             >
               {briefRunning ? (
-                <><span style={{ width:12, height:12, border:'1.5px solid #1D9E75', borderTopColor:'transparent', borderRadius:'50%', display:'inline-block', animation:'spin 0.8s linear infinite' }} /> Running analysis...</>
+                <><span style={{ width:12, height:12, border:`1.5px solid ${SB.primary}`, borderTopColor:'transparent', borderRadius:'50%', display:'inline-block', animation:'spin 0.8s linear infinite' }} /> Running analysis...</>
               ) : brief ? (
                 <span onClick={e => { e.stopPropagation(); setShowBrief(true); }}>
                   ✓ Algorithm brief {briefUpdatedAt ? `(${new Date(briefUpdatedAt).toLocaleDateString('en-GB', {day:'numeric',month:'short'})})` : ''} — click to view
@@ -384,7 +385,7 @@ export default function Dashboard({ onLogout, user }) {
                 'Run weekly LinkedIn analysis'
               )}
             </button>
-            <button onClick={()=>setShowNewClient(true)} style={{ background:'#1D9E75', color:'#fff', border:'none', padding:'8px 18px', borderRadius:8, fontWeight:500, cursor:'pointer' }}>
+            <button onClick={()=>setShowNewClient(true)} style={{ background:SB.primary, color:SB.darkest, border:'none', padding:'8px 18px', borderRadius:8, fontWeight:500, cursor:'pointer' }}>
               + New client
             </button>
           </div>
@@ -400,7 +401,7 @@ export default function Dashboard({ onLogout, user }) {
                 <div style={{ fontSize:15, fontWeight:600, color:'#1a1a1a' }}>LinkedIn Algorithm Brief</div>
                 <div style={{ display:'flex', gap:8, alignItems:'center' }}>
                   {briefUpdatedAt && <span style={{ fontSize:11, color:'#888' }}>Updated {new Date(briefUpdatedAt).toLocaleString('en-GB')}</span>}
-                  <button onClick={() => runAnalysis()} disabled={briefRunning} style={{ fontSize:12, padding:'5px 12px', background:'#1D9E75', color:'#fff', border:'none', borderRadius:6, cursor:'pointer' }}>
+                  <button onClick={() => runAnalysis()} disabled={briefRunning} style={{ fontSize:12, padding:'5px 12px', background:SB.primary, color:SB.darkest, border:'none', borderRadius:6, cursor:'pointer' }}>
                     Refresh
                   </button>
                   <button onClick={() => setShowBrief(false)} style={{ fontSize:12, padding:'5px 10px', background:'#f5f5f3', border:'0.5px solid #d0d0cc', borderRadius:6, cursor:'pointer', color:'#555' }}>
@@ -423,7 +424,7 @@ export default function Dashboard({ onLogout, user }) {
             <div key={s.label} style={{ background:'#fff', border:'0.5px solid #e0e0dc', borderRadius:8, padding:'14px 16px' }}>
               <div style={{ fontSize:12, color:'#888', marginBottom:4 }}>{s.label}</div>
               <div style={{ fontSize:26, fontWeight:500, color:'#1a1a1a' }}>{s.value}</div>
-              <div style={{ fontSize:11, color:'#1D9E75', marginTop:3 }}>{s.sub}</div>
+              <div style={{ fontSize:11, color:SB.primary, marginTop:3 }}>{s.sub}</div>
             </div>
           ))}
         </div>
@@ -435,7 +436,7 @@ export default function Dashboard({ onLogout, user }) {
         ) : clients.length === 0 ? (
           <div style={{ background:'#fff', border:'0.5px dashed #d0d0cc', borderRadius:12, padding:48, textAlign:'center' }}>
             <div style={{ fontSize:15, color:'#888', marginBottom:12 }}>No clients yet</div>
-            <button onClick={()=>setShowNewClient(true)} style={{ background:'#1D9E75', color:'#fff', border:'none', padding:'8px 18px', borderRadius:8, fontWeight:500, cursor:'pointer' }}>
+            <button onClick={()=>setShowNewClient(true)} style={{ background:SB.primary, color:SB.darkest, border:'none', padding:'8px 18px', borderRadius:8, fontWeight:500, cursor:'pointer' }}>
               Add your first client
             </button>
           </div>

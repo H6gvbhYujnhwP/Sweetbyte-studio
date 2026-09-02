@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Login     from './components/Login.jsx';
 import Dashboard from './components/Dashboard.jsx';
 import PortalApp from './components/customer-portal/PortalApp.jsx';
+import { SB } from './brand.js';
 
 // ─── Global fetch patch ───────────────────────────────────────────────────────
 // Automatically adds Authorization: Bearer <token> to every /api/ request.
@@ -86,7 +87,7 @@ function AdminApp() {
 
   if (auth === null) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f5f5f3' }}>
-      <div style={{ width: 32, height: 32, border: '3px solid #1D9E75', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      <div style={{ width: 32, height: 32, border: `3px solid ${SB.primary}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
