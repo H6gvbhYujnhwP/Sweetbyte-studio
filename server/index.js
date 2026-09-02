@@ -21,10 +21,12 @@ import crmDealsRoutes from './routes/crm-deals.js';
 import crmOrdersRoutes from './routes/crm-orders.js';
 import facebookPixelsRoutes from './routes/facebook-pixels.js';
 import facebookAdsRoutes from './routes/facebook-ads.js';
+import serviceEmailRoutes from './routes/service-email-api.js';
 import { metaConfigured, testConnection, META } from './services/meta-api.js';
 import { startPoller } from './services/imap-poller.js';
 import { startClassifier } from './services/classify-replies.js';
 import { startDripTicker } from './services/drip-ticker.js';
+import { startServiceEmailTicker } from './services/service-email-ticker.js';
 import { selfTest as cryptoSelfTest } from './services/crypto-vault.js';
 import { backfillLogos } from './services/logo-backfill.js';
 
@@ -70,6 +72,7 @@ app.use('/api/algorithm',   algorithmRoutes);
 app.use('/api/portal',      portalAuthRoutes);   // customer-portal auth (login/logout/check/reset)
 app.use('/api/portal',      portalRoutes);       // customer-portal data (posts, inbox, campaigns)
 app.use('/api/portal-admin', portalAdminRoutes); // admin-side portal management (requireAuth)
+app.use('/api/service-emails', serviceEmailRoutes); // WorkTrackr service emails: HMAC-signed bridge + public unsubscribe (auth is per-route, not router-wide)
 app.use('/api/idyq-bridge', idyqBridgeRoutes);   // App integration: mints bridge tickets for the IDYQ admin embed (requireAuth)
 
 const distPath = join(__dirname, '../dist');
@@ -88,6 +91,10 @@ app.listen(PORT, () => {
   console.log(`[env] SES_CONFIGURATION_SET: ${process.env.SES_CONFIGURATION_SET || 'NOT SET (account default config set will apply)'}`);
   console.log(`[env] IDYQ_BRIDGE_SECRET:    ${process.env.IDYQ_BRIDGE_SECRET                            ? 'SET ✓' : 'MISSING ✗ (IDYQ admin embed will not work)'}`);
   console.log(`[env] IDYQ_BASE_URL:         ${process.env.IDYQ_BASE_URL || 'https://idoyourquotes.com (default)'}`);
+  console.log(`[env] WORKTRACKR_SERVICE_EMAIL_SECRET: ${process.env.WORKTRACKR_SERVICE_EMAIL_SECRET ? 'SET ✓' : 'MISSING ✗ (WorkTrackr service emails will not work)'}`);
+  console.log(`[env] SERVICE_EMAIL_FROM:    ${process.env.SERVICE_EMAIL_FROM || 'billy@sweetbyte.co.uk (default)'}`);
+  console.log(`[env] SERVICE_EMAIL_CC:      ${process.env.SERVICE_EMAIL_CC || 'westley@sweetbyte.co.uk (default)'}`);
+  console.log(`[env] PUBLIC_URL:            ${process.env.PUBLIC_URL || 'NOT SET — unsubscribe links will use the onrender.com host'}`);
   console.log(`[env] META_ACCESS_TOKEN:     ${process.env.META_ACCESS_TOKEN ? 'SET ✓' : 'MISSING ✗ (Facebook Ads disabled)'}`);
   console.log(`[env] META_APP_SECRET:       ${process.env.META_APP_SECRET   ? 'SET ✓' : 'MISSING ✗ (calls unsigned)'}`);
   console.log(`[env] META_APP_ID:           ${process.env.META_APP_ID       ? 'SET ✓' : 'MISSING ✗'}`);
@@ -109,6 +116,10 @@ app.listen(PORT, () => {
   // Start the drip ticker — sends scheduled campaigns batch by batch in their
   // chosen window. Doesn't depend on encryption or Anthropic; just SES + DB.
   startDripTicker();
+
+  // Start the service-email ticker — sends WorkTrackr service emails once their
+  // undo window closes, and their follow-ups 7 days later. Needs SES + DB only.
+  startServiceEmailTicker();
 
   // Backfill any logos uploaded before the trim-at-upload pipeline shipped.
   // Fire-and-forget — runs in the background, logs progress, doesn't block

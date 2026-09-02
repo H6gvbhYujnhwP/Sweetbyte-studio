@@ -113,7 +113,7 @@ function extractMessageId(xml) {
 //   References: <chain of message-ids in the thread>
 // Both are optional — undefined means a fresh standalone email (existing
 // behaviour). Most call sites don't need them; only the portal reply route does.
-function buildRawEmail({ to, toName, fromName, fromEmail, replyTo, subject, htmlBody, plainBody, listUnsubUrl, inReplyTo, references }) {
+function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, htmlBody, plainBody, listUnsubUrl, inReplyTo, references }) {
   const boundary   = `b_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const toAddress  = toName ? `${toName} <${to}>` : to;
   const plain      = plainBody || htmlToPlain(htmlBody);
@@ -130,9 +130,23 @@ function buildRawEmail({ to, toName, fromName, fromEmail, replyTo, subject, html
   // Result: what you see in the editor matches what the recipient sees.
   const wrappedHtml = wrapBodyWithEmailCss(htmlBody);
 
+  // Cc — optional, and omitted entirely when absent so every existing call site
+  // produces a byte-identical message to before.
+  //
+  // We call SendRawEmail without explicit Destinations, so SES takes the
+  // recipient list from the headers themselves. Adding a Cc header is therefore
+  // enough to actually deliver a copy — no change needed at the API layer.
+  //
+  // Accepts a string or an array; multiple addresses are comma-joined per
+  // RFC 5322.
+  const ccList = (Array.isArray(cc) ? cc : (cc ? [cc] : []))
+    .map(a => String(a || '').trim())
+    .filter(Boolean);
+
   const headers = [
     `From: ${fromName} <${fromEmail}>`,
     `To: ${toAddress}`,
+    ...(ccList.length ? [`Cc: ${ccList.join(', ')}`] : []),
     `Reply-To: ${replyTo || fromEmail}`,
     `Subject: ${subjEnc}`,
     `MIME-Version: 1.0`,
@@ -211,8 +225,11 @@ function buildRawEmail({ to, toName, fromName, fromEmail, replyTo, subject, html
 //
 // inReplyTo / references — optional, used by the customer-portal reply route
 // to thread outbound messages with the inbound message they're answering.
+// cc — optional. Added for WorkTrackr service emails, which always copy a
+// second internal address. Defaults to null, so campaign and portal sends are
+// unaffected.
 export async function sendEmail({
-  to, toName, fromName, fromEmail, replyTo, subject, htmlBody, plainBody,
+  to, toName, cc = null, fromName, fromEmail, replyTo, subject, htmlBody, plainBody,
   campaignId, subscriberId, baseUrl,
   track_opens = false, track_clicks = false, track_unsub = false,
   inReplyTo = null, references = null,
@@ -234,7 +251,7 @@ export async function sendEmail({
   }
 
   const raw = buildRawEmail({
-    to, toName, fromName, fromEmail, replyTo, subject,
+    to, toName, cc, fromName, fromEmail, replyTo, subject,
     htmlBody: finalHtml, plainBody, listUnsubUrl,
     inReplyTo, references,
   });
