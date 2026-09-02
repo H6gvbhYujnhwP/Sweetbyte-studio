@@ -63,15 +63,27 @@ every historical send.
 | key | label |
 |---|---|
 | `about_sweetbyte` | About Sweetbyte |
-| `domains_websites` | Domain names & websites |
 | `it_support` | IT support packages |
-| `voip_telephony` | VoIP telephony |
 | `cyber_security` | Cyber security solutions |
-| `connectivity` | Internet lines & Wi-Fi |
-| `backup` | Backup solutions |
+| `voip_telephony` | VoIP telephony |
+| `internet_wifi` | Internet lines & Wi-Fi |
+| `backup_solutions` | Backup solutions |
 | `office_365` | Office 365 |
-| `automation` | Automation services |
-| `app_development` | Custom app development |
+| `domains_websites` | Domain names & websites |
+| `automation_services` | Automation services |
+| `custom_app_development` | Custom app development |
+| `marketing_services` | Marketing services |
+| `password_document_protection` | Password & document protection |
+
+Keys match the "Service ID" values in *Sweetbyte Post Call Email Templates*.
+
+**Selection order is meaningful.** The source document says to keep the
+customer's highest-interest service first, so the order the chips are tapped is
+preserved through to the rendered email. `normaliseServiceKeys` deliberately
+does not sort.
+
+**Headings appear only on merged emails.** One service reads as a letter and
+needs no heading; two or more run together as one wall of prose without them.
 
 ### `POST /send`
 ```json
@@ -140,6 +152,12 @@ time to opt out between the two emails. An address counts as suppressed if it's
 in `service_email_unsubscribes` **or** in `contact_unsubscribed_all` under any
 email_client. Set `SWEETBYTE_EMAIL_CLIENT_ID` to mirror service-email opt-outs
 back into the campaign side so one opt-out stops everything.
+
+**Copy is the approved brochure wording.** Service blocks come from *Sweetbyte
+Post Call Email Templates*, adapted from the Services A5 Brochure 2026. The
+day-7 follow-up reuses the same approved blocks and changes only the opening
+paragraph — no second set of service claims has been invented. Give a service a
+`followupHtml` to override that.
 
 **No open/click tracking.** Every message is CC'd, so a tracking pixel fires
 from the CC's client and records an "open" the prospect never made. Worse than

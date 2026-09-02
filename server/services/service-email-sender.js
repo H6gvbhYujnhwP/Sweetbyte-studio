@@ -448,7 +448,11 @@ export async function processDue() {
         fromName:  FROM_NAME,
         fromEmail: FROM_EMAIL,
         replyTo:   FROM_EMAIL,
-        subject:   buildSubject(services, row.step),
+        subject:   buildSubject(services, row.step, {
+          companyName: row.company_name,
+          contactName: row.contact_name,
+          senderName: SENDER_NAME,
+        }),
         htmlBody,
       });
 
