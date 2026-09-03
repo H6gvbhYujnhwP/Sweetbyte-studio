@@ -32,6 +32,7 @@
 //     handover to recreate the user.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect } from 'react';
+import { SB } from '../../brand.js';
 
 export default function IDYQAdmin() {
   const [url, setUrl]     = useState(null);
@@ -86,7 +87,7 @@ export default function IDYQAdmin() {
     return (
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f5f3' }}>
         <div style={{
-          width:28, height:28, border:'2.5px solid #1D9E75', borderTopColor:'transparent',
+          width:28, height:28, border:`2.5px solid ${SB.primary}`, borderTopColor:'transparent',
           borderRadius:'50%', animation:'spin 0.8s linear infinite',
         }} />
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

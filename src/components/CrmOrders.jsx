@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { OrderModal, OrderStatusPill, fmtMoney } from './CrmCompanies.jsx';
+import { SB } from '../brand.js';
 
 // CrmOrders — the cross-company order screens. One component, three modes via
 // the `queue` prop:
@@ -9,7 +10,7 @@ import { OrderModal, OrderStatusPill, fmtMoney } from './CrmCompanies.jsx';
 // Clicking a row opens the shared OrderModal, which shows the right workflow
 // buttons for the order's status and the signed-in user's access.
 
-const GREEN_DARK = '#0F6E56';
+const GREEN_DARK = SB.strong;
 const card = { background: '#fff', border: '0.5px solid #e0e0dc', borderRadius: 10 };
 
 const STATUS_TABS = [

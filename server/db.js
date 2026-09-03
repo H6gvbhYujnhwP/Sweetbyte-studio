@@ -141,7 +141,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS email_clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    color TEXT DEFAULT '#1D9E75',
+    color TEXT DEFAULT '#1EA4C9',
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -152,7 +152,7 @@ db.exec(`
     from_name TEXT NOT NULL,
     from_email TEXT NOT NULL,
     reply_to TEXT NOT NULL,
-    color TEXT DEFAULT '#1D9E75',
+    color TEXT DEFAULT '#1EA4C9',
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (email_client_id) REFERENCES email_clients(id)
   );
@@ -228,7 +228,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS email_clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    color TEXT DEFAULT '#1D9E75',
+    color TEXT DEFAULT '#1EA4C9',
     created_at TEXT DEFAULT (datetime('now'))
   );
 `);
@@ -2105,3 +2105,43 @@ db.exec(`
     removed_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+
+// ── 30. Service email catalogue — WorkTrackr integration (Phase 1) ────────────
+// The list of services a salesperson can tap in WorkTrackr after a cold call.
+// WorkTrackr fetches this via GET /api/service-emails/catalogue and shows one
+// chip per row, ordered by sort_order, hidden when active = 0.
+//
+// service_key is the STABLE identifier. WorkTrackr records the key against
+// every send it mirrors locally, and uses it to grey out services already sent
+// to an address. Renaming a label is safe and expected; CHANGING A KEY breaks
+// that history silently, because past sends still reference the old string.
+// Treat keys as permanent once a service has been used.
+//
+// Seeded with twelve placeholders so the WorkTrackr panel has something to
+// render before the real service names are decided. Rename the labels in
+// Studio (Settings → Service emails); leave the keys alone.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS service_catalogue (
+    service_key TEXT PRIMARY KEY,
+    label       TEXT NOT NULL,
+    description TEXT,
+    list_id     TEXT,
+    active      INTEGER NOT NULL DEFAULT 1,
+    sort_order  INTEGER NOT NULL DEFAULT 100,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (list_id) REFERENCES email_lists(id)
+  );
+`);
+{
+  const existing = db.prepare('SELECT COUNT(*) AS c FROM service_catalogue').get().c;
+  if (existing === 0) {
+    const ins = db.prepare(
+      'INSERT INTO service_catalogue (service_key, label, sort_order) VALUES (?, ?, ?)'
+    );
+    for (let i = 1; i <= 12; i++) {
+      const n = String(i).padStart(2, '0');
+      ins.run(`service-${n}`, `Service ${i} — rename me`, i * 10);
+    }
+    console.log('[db] seeded service_catalogue with 12 placeholder services');
+  }
+}

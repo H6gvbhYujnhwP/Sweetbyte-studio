@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import CampaignProgress from './CampaignProgress.jsx';
 import NewClientModal from './NewClientModal.jsx';
+import { SB } from '../brand.js';
 
-const GREEN = '#1D9E75';
+const GREEN = SB.primary;
 
 export default function ClientDetail({ clientId, onBack, onRefresh }) {
   const [client, setClient]                     = useState(null);
@@ -508,7 +509,7 @@ export default function ClientDetail({ clientId, onBack, onRefresh }) {
               Should this campaign include AI-generated images for each post?
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-              <button onClick={() => startCampaign(true)} style={{ padding: '11px 16px', background: '#1D9E75', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer', textAlign: 'left' }}>
+              <button onClick={() => startCampaign(true)} style={{ padding: '11px 16px', background: SB.primary, color: SB.darkest, border: 'none', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer', textAlign: 'left' }}>
                 ✓ Yes — generate images for each post
                 <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, opacity: 0.85 }}>{client.image_engine === 'gpt_image' ? 'Uses gpt-image-2 — designed ads, higher cost per image' : 'Uses Gemini Nano Banana (~£0.03 per image)'}</div>
               </button>
@@ -541,7 +542,7 @@ function CampaignCard({ campaign, onView, onDelete }) {
   const isPortalDeployed = campaign.status === 'completed' && campaign.deployed_by === 'portal';
 
   const STATUS = {
-    completed:         { label: 'Deployed',          bg: '#E1F5EE', color: '#085041' },
+    completed:         { label: 'Deployed',          bg: SB.tint, color: SB.dark },
     running:           { label: 'Running',           bg: '#FAEEDA', color: '#633806' },
     awaiting_approval: { label: 'Ready to review',   bg: '#FFF3CD', color: '#7a4a00' },
     failed:            { label: 'Failed',            bg: '#FCEBEB', color: '#501313' },
@@ -606,7 +607,7 @@ function CampaignCard({ campaign, onView, onDelete }) {
         <div style={{ display: 'flex', gap: 12 }}>
           {campaign.images_generated > 0 && <span style={{ fontSize: 12, color: '#888' }}>{campaign.images_generated} images</span>}
           {campaign.posts_deployed > 0
-            ? <span style={{ fontSize: 12, color: '#1D9E75', fontWeight: 500 }}>✓ {campaign.posts_deployed} deployed to Supergrow</span>
+            ? <span style={{ fontSize: 12, color: SB.primary, fontWeight: 500 }}>✓ {campaign.posts_deployed} deployed to Supergrow</span>
             : campaign.status === 'awaiting_approval' ? <span style={{ fontSize: 12, color: '#888' }}>Not yet deployed</span> : null
           }
           {campaign.status === 'failed' && campaign.error_log && <span style={{ fontSize: 12, color: '#E24B4A' }}>{campaign.error_log.slice(0, 60)}</span>}
@@ -615,7 +616,7 @@ function CampaignCard({ campaign, onView, onDelete }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
         {viewLabel && (
-          <button onClick={onView} style={{ fontSize: 12, color: '#1D9E75', fontWeight: 500, padding: '5px 12px', border: '0.5px solid #9FE1CB', borderRadius: 7, background: '#E1F5EE', cursor: 'pointer' }}>
+          <button onClick={onView} style={{ fontSize: 12, color: SB.primary, fontWeight: 500, padding: '5px 12px', border: `0.5px solid ${SB.light}`, borderRadius: 7, background: SB.tint, cursor: 'pointer' }}>
             {viewLabel}
           </button>
         )}

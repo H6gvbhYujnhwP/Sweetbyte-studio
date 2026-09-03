@@ -25,11 +25,12 @@
 // admin Bearer-token middleware (handled by App.jsx's fetch interceptor).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useRef } from 'react';
+import { SB } from '../brand.js';
 
 // Theme — matches PortalAdmin.jsx exactly so the section feels native.
-const GREEN     = '#1D9E75';
-const GREEN_HI  = '#0F6E56';
-const GREEN_BG  = '#E1F5EE';
+const GREEN     = SB.primary;
+const GREEN_HI  = SB.strong;
+const GREEN_BG  = SB.tint;
 const TEXT      = '#1a1a1a';
 const MUTED     = '#666';
 const TERTIARY  = '#999';
@@ -60,7 +61,7 @@ const OPEN_PROSPECT_KEY = 'studio.crm.hot_prospects.open_prospect_id';
 
 const STATUS_OPTIONS = [
   { value: 'new',         label: 'New',         bg: '#E6F1FB', fg: '#0C447C' },
-  { value: 'contacted',   label: 'Contacted',   bg: '#E1F5EE', fg: '#0F6E56' },
+  { value: 'contacted',   label: 'Contacted',   bg: SB.tint, fg: SB.strong },
   { value: 'no_response', label: 'No response', bg: '#F1EFE8', fg: '#5F5E5A' },
 ];
 
@@ -72,7 +73,7 @@ const TAG_COLORS = [
   { value: 'red',    label: 'Red',      bg: '#FAECE7', fg: '#793F1F' },
   { value: 'orange', label: 'Orange',   bg: '#FAEEDA', fg: '#854F0B' },
   { value: 'yellow', label: 'Yellow',   bg: '#FFF7C2', fg: '#5C4A05' },
-  { value: 'green',  label: 'Green',    bg: '#E1F5EE', fg: '#0F6E56' },
+  { value: 'green',  label: 'Green',    bg: SB.tint, fg: SB.strong },
   { value: 'blue',   label: 'Blue',     bg: '#E6F1FB', fg: '#0C447C' },
   { value: 'purple', label: 'Purple',   bg: '#EEEDFE', fg: '#3C3489' },
   { value: 'pink',   label: 'Pink',     bg: '#FCE7F2', fg: '#83215E' },
@@ -107,7 +108,7 @@ function initials(name) {
 
 // Stable pastel palette for avatar backgrounds. Same name → same colour.
 const AVATAR_PALETTE = [
-  { bg: '#E1F5EE', fg: '#085041' },
+  { bg: SB.tint, fg: SB.dark },
   { bg: '#FAECE7', fg: '#712B13' },
   { bg: '#EEEDFE', fg: '#3C3489' },
   { bg: '#FBEAF0', fg: '#72243E' },
@@ -939,7 +940,7 @@ function DetailBody({ data, followUp, setFollowUp, notes, setNotes, status, setS
           by whom. Hidden while active. */}
       {isConverted && (
         <div style={{
-          background: GREEN_BG, border:`0.5px solid #9FE1CB`,
+          background: GREEN_BG, border:`0.5px solid ${SB.light}`,
           borderRadius:8, padding:'10px 14px', marginBottom:14,
           fontSize:13, color: GREEN_HI,
         }}>
@@ -1075,7 +1076,7 @@ function DetailBody({ data, followUp, setFollowUp, notes, setNotes, status, setS
       {resubStatus && (
         <div style={{
           marginBottom:12, fontSize:12,
-          color: resubStatus.kind === 'success' ? '#085041'
+          color: resubStatus.kind === 'success' ? SB.dark
                : resubStatus.kind === 'error'   ? DANGER
                : '#5F5E5A',
           fontStyle: resubStatus.kind === 'info' ? 'italic' : 'normal',
@@ -1118,7 +1119,7 @@ function DetailBody({ data, followUp, setFollowUp, notes, setNotes, status, setS
       {unsubStatus && (
         <div style={{
           marginBottom:12, fontSize:12,
-          color: unsubStatus.kind === 'success' ? '#085041'
+          color: unsubStatus.kind === 'success' ? SB.dark
                : unsubStatus.kind === 'error'   ? DANGER
                : '#5F5E5A',
           fontStyle: unsubStatus.kind === 'info' ? 'italic' : 'normal',

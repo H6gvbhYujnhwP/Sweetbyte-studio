@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { SB, BRAND_NAME } from '../brand.js';
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('');
@@ -44,9 +45,11 @@ export default function Login({ onLogin }) {
 
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 32 }}>
-          <div style={{ width: 36, height: 36, background: '#1D9E75', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 16 }}>G</div>
+          <div style={{ width: 36, height: 36, background: '#fff', border: `0.5px solid ${SB.tint}`, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 3, boxSizing: 'border-box' }}>
+            <img src="/sweetbyte-logo.png" alt={BRAND_NAME} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          </div>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 15, color: '#1a1a1a' }}>The Green Agents</div>
+            <div style={{ fontWeight: 600, fontSize: 15, color: SB.darkest }}>{BRAND_NAME}</div>
             <div style={{ fontSize: 12, color: '#888' }}>Studio</div>
           </div>
         </div>
@@ -66,7 +69,7 @@ export default function Login({ onLogin }) {
             required
             autoFocus
             style={{ ...inputStyle(!!error), marginBottom: 14 }}
-            onFocus={e => { if (!error) e.target.style.borderColor = '#1D9E75'; }}
+            onFocus={e => { if (!error) e.target.style.borderColor = SB.primary; }}
             onBlur={e  => { e.target.style.borderColor = error ? '#e74c3c' : '#d0d0cc'; }}
           />
 
@@ -83,7 +86,7 @@ export default function Login({ onLogin }) {
             placeholder="Password"
             required
             style={{ ...inputStyle(!!error), marginBottom: 14 }}
-            onFocus={e => { if (!error) e.target.style.borderColor = '#1D9E75'; }}
+            onFocus={e => { if (!error) e.target.style.borderColor = SB.primary; }}
             onBlur={e  => { e.target.style.borderColor = error ? '#e74c3c' : '#d0d0cc'; }}
           />
 
@@ -95,8 +98,8 @@ export default function Login({ onLogin }) {
             type="submit"
             disabled={loading || !username || !password}
             style={{
-              width: '100%', background: loading ? '#9FE1CB' : '#1D9E75',
-              color: '#fff', border: 'none', padding: '11px',
+              width: '100%', background: loading ? SB.light : SB.primary,
+              color: SB.onPrimary, border: 'none', padding: '11px',
               borderRadius: 8, fontWeight: 600, fontSize: 14,
               cursor: loading || !username || !password ? 'not-allowed' : 'pointer',
               transition: 'background 0.15s'

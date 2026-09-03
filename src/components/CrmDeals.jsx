@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { fmtMoney, DealStatusPill, fmtDue } from './CrmCompanies.jsx';
+import { SB } from '../brand.js';
 
 // CrmDeals — the cross-company deals forecast (sidebar → CRM → Deals).
 // Spreadsheet-style table + a totals strip that weights OPEN deals by
 // likelihood. Status filter: Open / Won / Lost / All. Deals are created on a
 // company; here you see the whole pipeline.
 
-const GREEN_DARK = '#0F6E56';
+const GREEN_DARK = SB.strong;
 const card = { background: '#fff', border: '0.5px solid #e0e0dc', borderRadius: 10 };
 
 function Tab({ label, on, onClick }) {

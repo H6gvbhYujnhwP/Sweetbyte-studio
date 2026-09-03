@@ -10,6 +10,7 @@ import algorithmRoutes from './routes/algorithm.js';
 import portalAuthRoutes from './routes/portal-auth.js';
 import portalAdminRoutes from './routes/portal-admin.js';
 import portalRoutes from './routes/portal.js';
+import serviceEmailRoutes from './routes/service-emails.js';
 import idyqBridgeRoutes from './routes/idyq-bridge.js';
 import hotProspectsRoutes from './routes/hot-prospects.js';
 import adminUsersRoutes from './routes/admin-users.js';
@@ -70,6 +71,7 @@ app.use('/api/algorithm',   algorithmRoutes);
 app.use('/api/portal',      portalAuthRoutes);   // customer-portal auth (login/logout/check/reset)
 app.use('/api/portal',      portalRoutes);       // customer-portal data (posts, inbox, campaigns)
 app.use('/api/portal-admin', portalAdminRoutes); // admin-side portal management (requireAuth)
+app.use('/api/service-emails', serviceEmailRoutes); // WorkTrackr bridge: HMAC-signed server-to-server, NOT behind admin login
 app.use('/api/idyq-bridge', idyqBridgeRoutes);   // App integration: mints bridge tickets for the IDYQ admin embed (requireAuth)
 
 const distPath = join(__dirname, '../dist');
@@ -77,7 +79,7 @@ app.use(express.static(distPath));
 app.get('*', (req, res) => res.sendFile(join(distPath, 'index.html')));
 
 app.listen(PORT, () => {
-  console.log(`Green Agents Studio running on port ${PORT}`);
+  console.log(`Sweetbyte Studio running on port ${PORT}`);
   console.log(`[env] SUPERGROW_MCP_URL:     ${process.env.SUPERGROW_MCP_URL                             ? 'SET ✓' : 'MISSING ✗'}`);
   console.log(`[env] ANTHROPIC_API_KEY:     ${process.env.ANTHROPIC_API_KEY                             ? 'SET ✓' : 'MISSING ✗'}`);
   console.log(`[env] STUDIO_PASSWORD:       ${process.env.STUDIO_PASSWORD                               ? 'SET ✓' : 'MISSING ✗'}`);

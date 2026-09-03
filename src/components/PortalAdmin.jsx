@@ -21,10 +21,11 @@
 //   3. Portal URL — copy-to-clipboard https://studio.thegreenagents.com/c/<slug>.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect } from 'react';
+import { SB } from '../brand.js';
 
-const GREEN     = '#1D9E75';
-const GREEN_HI  = '#0F6E56';
-const GREEN_BG  = '#E1F5EE';
+const GREEN     = SB.primary;
+const GREEN_HI  = SB.strong;
+const GREEN_BG  = SB.tint;
 const TEXT      = '#1a1a1a';
 const MUTED     = '#666';
 const TERTIARY  = '#999';
@@ -295,7 +296,7 @@ function LogoPanel({ customer, onUpdated }) {
         {/* Preview — same 60x60 footprint whether logo set or not */}
         <div style={{
           width:60, height:60, borderRadius:8,
-          background: customer.logo_url ? '#fff' : (customer.color || '#1D9E75'),
+          background: customer.logo_url ? '#fff' : (customer.color || SB.primary),
           border: customer.logo_url ? `0.5px solid ${BORDER}` : 'none',
           display:'flex', alignItems:'center', justifyContent:'center',
           color:'white', fontSize:20, fontWeight:500, flexShrink:0,
@@ -1126,7 +1127,7 @@ function selectStyle() {
 function btnPrimary(disabled) {
   return {
     padding:'8px 14px', fontSize:13, fontWeight:500,
-    background: disabled ? '#9FE1CB' : GREEN, color:'white',
+    background: disabled ? SB.light : GREEN, color:'white',
     border:'none', borderRadius:6,
     cursor: disabled ? 'default' : 'pointer',
   };

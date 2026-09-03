@@ -28,6 +28,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import db from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { prepareLogoForStorage } from '../services/logo-prep.js';
+import { DEFAULT_CLIENT_COLOR } from '../../src/brand.js';
 
 const router = Router();
 const BCRYPT_COST = 12;
@@ -329,7 +330,7 @@ router.post('/customers', (req, res) => {
     INSERT INTO email_clients
       (id, name, color, slug, portal_enabled, service_email_enabled, source)
     VALUES (?, ?, ?, ?, 1, 0, 'portal')
-  `).run(id, trimmedName, '#1D9E75', slug);
+  `).run(id, trimmedName, DEFAULT_CLIENT_COLOR, slug);
 
   const row = db.prepare(`SELECT * FROM email_clients WHERE id = ?`).get(id);
   res.json(projectCustomer(row));

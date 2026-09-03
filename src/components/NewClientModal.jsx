@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { SB } from '../brand.js';
 
 const FIELD = ({ label, name, value, onChange, type='text', required=false, hint='' }) => (
   <div style={{ marginBottom:14 }}>
@@ -109,14 +110,14 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
         </div>
 
         <form onSubmit={handleSubmit} style={{ padding:'20px 24px' }}>
-          <div style={{ fontSize:11, fontWeight:500, color:'#1D9E75', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>Client info</div>
+          <div style={{ fontSize:11, fontWeight:500, color:SB.primary, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12 }}>Client info</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 16px' }}>
             <FIELD label="Client name" name="name" value={form.name} onChange={set} required />
             <FIELD label="Brand name" name="brand" value={form.brand} onChange={set} required />
           </div>
           <FIELD label="Website" name="website" value={form.website} onChange={set} />
 
-          <div style={{ fontSize:11, fontWeight:500, color:'#1D9E75', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12, marginTop:8 }}>Supergrow</div>
+          <div style={{ fontSize:11, fontWeight:500, color:SB.primary, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12, marginTop:8 }}>Supergrow</div>
 
           {/* API key + fetch button */}
           <div style={{ marginBottom:14 }}>
@@ -130,7 +131,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
               />
               <button
                 type="button" onClick={fetchWorkspaces} disabled={fetchingWs}
-                style={{ padding:'8px 14px', background:'#1D9E75', color:'#fff', border:'none', borderRadius:7, fontWeight:500, fontSize:12, whiteSpace:'nowrap', opacity: fetchingWs ? 0.7 : 1, cursor: fetchingWs ? 'wait' : 'pointer' }}
+                style={{ padding:'8px 14px', background:SB.primary, color:SB.darkest, border:'none', borderRadius:7, fontWeight:500, fontSize:12, whiteSpace:'nowrap', opacity: fetchingWs ? 0.7 : 1, cursor: fetchingWs ? 'wait' : 'pointer' }}
               >
                 {fetchingWs ? 'Loading...' : '↓ Fetch workspaces'}
               </button>
@@ -153,7 +154,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
               <select
                 onChange={handleWorkspaceSelect}
                 defaultValue=""
-                style={{ width:'100%', padding:'8px 10px', border: wsSelected ? '0.5px solid #1D9E75' : '0.5px solid #d0d0cc', borderRadius:7, outline:'none', background:'#fff', color:'#1a1a1a' }}
+                style={{ width:'100%', padding:'8px 10px', border: wsSelected ? `0.5px solid ${SB.primary}` : '0.5px solid #d0d0cc', borderRadius:7, outline:'none', background:'#fff', color:'#1a1a1a' }}
               >
                 <option value="" disabled>— choose a workspace —</option>
                 {workspaces.map(ws => (
@@ -163,7 +164,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
                 ))}
               </select>
               {wsSelected && (
-                <div style={{ fontSize:11, color:'#1D9E75', marginTop:4 }}>
+                <div style={{ fontSize:11, color:SB.primary, marginTop:4 }}>
                   ✓ Workspace selected — ID and name auto-filled below
                 </div>
               )}
@@ -190,7 +191,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
             />
           </div>
 
-          <div style={{ fontSize:11, fontWeight:500, color:'#1D9E75', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12, marginTop:8 }}>Deployment settings</div>
+          <div style={{ fontSize:11, fontWeight:500, color:SB.primary, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12, marginTop:8 }}>Deployment settings</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 16px' }}>
             <SELECT label="Timezone" name="timezone" value={form.timezone} onChange={set} options={[
               { value:'Europe/London', label:'London (GMT)' },
@@ -215,7 +216,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
             ]} />
           </div>
 
-          <div style={{ fontSize:11, fontWeight:500, color:'#1D9E75', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12, marginTop:8 }}>RAG document</div>
+          <div style={{ fontSize:11, fontWeight:500, color:SB.primary, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:12, marginTop:8 }}>RAG document</div>
           <div
             style={{ border:'0.5px dashed #d0d0cc', borderRadius:8, padding:16, textAlign:'center', marginBottom:16, background:'#fafafa', cursor:'pointer' }}
             onClick={() => document.getElementById('rag-upload').click()}
@@ -223,7 +224,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
             <input id="rag-upload" type="file" accept=".md,.txt,.pdf" onChange={e => setRag(e.target.files[0])} style={{ display:'none' }} />
             {rag ? (
               <div>
-                <div style={{ fontSize:13, color:'#1D9E75', fontWeight:500 }}>{rag.name}</div>
+                <div style={{ fontSize:13, color:SB.primary, fontWeight:500 }}>{rag.name}</div>
                 <div style={{ fontSize:11, color:'#888', marginTop:4 }}>Click to change</div>
               </div>
             ) : existing?.rag_filename ? (
@@ -243,7 +244,7 @@ export default function NewClientModal({ onClose, onCreated, existing }) {
 
           <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
             <button type="button" onClick={onClose} style={{ padding:'8px 18px', border:'0.5px solid #d0d0cc', borderRadius:8, background:'transparent', color:'#666' }}>Cancel</button>
-            <button type="submit" disabled={loading} style={{ padding:'8px 18px', background:'#1D9E75', color:'#fff', border:'none', borderRadius:8, fontWeight:500 }}>
+            <button type="submit" disabled={loading} style={{ padding:'8px 18px', background:SB.primary, color:SB.darkest, border:'none', borderRadius:8, fontWeight:500 }}>
               {loading ? 'Saving...' : existing ? 'Save changes' : 'Create client'}
             </button>
           </div>
