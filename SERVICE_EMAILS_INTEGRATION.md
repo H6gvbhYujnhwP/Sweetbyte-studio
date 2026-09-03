@@ -1,29 +1,70 @@
-# WorkTrackr ↔ Sweetbyte Studio — service emails
+# Service emails — WorkTrackr ↔ Sweetbyte Studio
 
-Sits alongside `WORKTRACKR_IDYQ_INTEGRATION.md` and follows the same conventions.
-Single source of truth for the contract; both sides should be changed together.
+Single source of truth for the contract between **WorkTrackr** (`worktrackr.cloud`,
+the caller) and **Sweetbyte Studio** (the source). Both sides reference this file
+in their code comments. If you change the contract, change it here first.
 
-**Phase 1 (this document, built): Sweetbyte side.**
-**Phase 2 (not yet built): WorkTrackr side.**
+Related but separate, do not confuse:
 
----
+| Integration | Secret | What it is |
+|---|---|---|
+| Studio → IDYQ admin embed | `IDYQ_BRIDGE_SECRET` | signed-ticket iframe login |
+| WorkTrackr → IDYQ data pull | `WORKTRACKR_BRIDGE_SECRET` | quotes + catalogue (see `WORKTRACKR_IDYQ_INTEGRATION.md`) |
+| **WorkTrackr → Studio service emails** | **`WORKTRACKR_SERVICE_EMAIL_SECRET`** | **this document** |
 
-## What this does
-
-After a cold call, the salesperson types the address they were just given into
-the company record, taps one or more services, and taps Send. WorkTrackr hands
-the details to Studio; Studio sends the email and, 7 days later, sends a
-follow-up about the same services without anyone touching it.
-
-Multi-select produces **one merged email**, not one per service — each service
-contributes a block, blocks render in canonical order, with a single greeting
-and sign-off.
+Three relationships, three secrets. Never reuse one for another.
 
 ---
 
-## Security model
+## Status
 
-Same shape as the Studio↔IDYQ bridge, **different secret**.
+| Endpoint | WorkTrackr | Studio | Notes |
+|---|---|---|---|
+| `GET /catalogue` | built | **built** | live |
+| `POST /send` | built | **501** | needs SES send + undo window + follow-up |
+| `POST /cancel` | built | **501** | undo within 10s |
+| `GET /status` | built | **501** | reconciliation |
+| `POST /cancel-followups` | built | **501** | called when a company goes dead/customer |
+
+Studio deliberately returns **501 Not Implemented** for the unbuilt endpoints
+rather than a stubbed `200`. A fake success would make WorkTrackr write a row
+into `service_email_sends` and a note onto the company timeline for an email
+that never left, and the salesperson would believe a prospect had been emailed.
+An honest error is recoverable; a false record is not.
+
+---
+
+## Environment variables
+
+**On WorkTrackr:**
+
+- `WORKTRACKR_SERVICE_EMAIL_SECRET` — long random hex. Must match Studio.
+- `SWEETBYTE_BASE_URL` — Studio's origin, no trailing slash.
+
+**On Studio:**
+
+- `WORKTRACKR_SERVICE_EMAIL_SECRET` — the same value.
+
+If either is missing on WorkTrackr, `callStudio()` throws before making any
+network call, and `/api/service-emails/catalogue` returns **500** with
+"Could not load services". If they are set but Studio can't be reached, the same
+route returns **502** instead. That difference is the fastest way to tell a
+configuration problem from a connectivity one.
+
+If the secret is missing on Studio, every endpoint returns **503**, not 500 —
+an unconfigured service is a deployment state, not a crash.
+
+> ⚠️ `SWEETBYTE_BASE_URL` must point at the **Sweetbyte** service. Note that the
+> Sweetbyte service still answers on `thegreenagents-studio.onrender.com`: the
+> Render rename on 2026-09-02 changed the display name only, not the URL or the
+> service slug. TGA Studio now lives on a different service entirely. Pointing
+> this at the wrong one sends Sweetbyte's cold-call contacts into TGA's database.
+
+---
+
+## Signing
+
+Every request from WorkTrackr carries an HMAC signature:
 
 ```
 payload = "<expiryUnixSeconds>.<nonce>.<METHOD>.<PATH>"
@@ -31,204 +72,80 @@ sig     = HMAC-SHA256(WORKTRACKR_SERVICE_EMAIL_SECRET, payload)   // hex
 header  = X-WT-Signature: <expiry>.<nonce>.<sig>
 ```
 
-- `PATH` is the route path within the mount, e.g. `/send` — **not** the full URL
-  and not `/api/service-emails/send`. Signing the route path keeps the contract
-  stable if the mount point ever moves.
-- `expiry` ≈ 120s out. Studio rejects anything already past.
-- Constant-time compare; mismatch or expiry → `401`.
-- Nonces are **not** tracked, matching the existing bridge. A replayed `/send`
-  inside the window is caught by the dedupe rule instead — the second attempt
-  finds the service already sent to that address and gets `409 already_sent`.
+- `PATH` is the path **within the mount** — `/catalogue`, not
+  `/api/service-emails/catalogue`.
+- Method and path are inside the signature, so a captured signature for a
+  harmless `GET /catalogue` cannot be replayed against `POST /send`.
+- WorkTrackr signs 120 seconds out. Studio allows 30 seconds of clock skew on
+  top, because two Render services will not have identical clocks and a
+  three-second drift should not produce an intermittent failure.
+- Studio rejects an expiry more than 600 seconds in the future, which would
+  otherwise widen the replay window indefinitely.
+- Comparison is constant-time.
 
-Do not reuse `IDYQ_BRIDGE_SECRET` or `WORKTRACKR_BRIDGE_SECRET`. Different
-relationship, different secret.
+Studio returns **401** for a missing, malformed, expired or mismatched
+signature, and logs the method and path — never the signature itself.
 
 ---
 
-## API — Studio exposes, WorkTrackr calls
+## `GET /catalogue`
 
-Base: `https://<studio-host>/api/service-emails`
-
-### `GET /catalogue`
-Returns the service list. WorkTrackr renders its chips from this rather than
-hardcoding a second copy, so adding a service is a one-app change.
+Returns the services WorkTrackr renders as tappable chips.
 
 ```json
-{ "services": [ { "key": "it_support", "label": "IT support packages", "order": 2 } ] }
+{ "services": [ { "key": "service-01", "label": "IT Support", "description": null } ] }
 ```
 
-Keys are permanent — the dedupe rule is keyed on them, so renaming one orphans
-every historical send.
+`key` and `label` are both required by WorkTrackr's `ServiceEmailPanel.jsx`.
 
-| key | label |
-|---|---|
-| `about_sweetbyte` | About Sweetbyte |
-| `it_support` | IT support packages |
-| `cyber_security` | Cyber security solutions |
-| `voip_telephony` | VoIP telephony |
-| `internet_wifi` | Internet lines & Wi-Fi |
-| `backup_solutions` | Backup solutions |
-| `office_365` | Office 365 |
-| `domains_websites` | Domain names & websites |
-| `automation_services` | Automation services |
-| `custom_app_development` | Custom app development |
-| `marketing_services` | Marketing services |
-| `password_document_protection` | Password & document protection |
+**`key` is permanent.** WorkTrackr stores it against every send in its local
+`service_email_sends` mirror and uses it to grey out services already sent to an
+address. Renaming a `label` is safe and expected. **Changing a `key` silently
+breaks that history**, because past sends still reference the old string and no
+error is raised — the chip simply stops showing as already sent. Treat a key as
+permanent from the moment a service is first used.
 
-Keys match the "Service ID" values in *Sweetbyte Post Call Email Templates*.
+Inactive services are **omitted**, not flagged, because WorkTrackr renders every
+row it receives. Withholding a row is what "turn this service off" means.
 
-**Selection order is meaningful.** The source document says to keep the
-customer's highest-interest service first, so the order the chips are tapped is
-preserved through to the rendered email. `normaliseServiceKeys` deliberately
-does not sort.
+Ordering is Studio's (`sort_order`, then label) and WorkTrackr honours it.
 
-**Headings appear only on merged emails.** One service reads as a letter and
-needs no heading; two or more run together as one wall of prose without them.
+WorkTrackr caches the response for 5 minutes, process-local, and will serve a
+stale cache rather than an empty grid if Studio is briefly unreachable. A newly
+added service therefore appears within 5 minutes without a redeploy.
 
-### `POST /send`
-```json
-{ "externalCompanyId": "<WorkTrackr contacts.id>",
-  "companyName": "Acme Ltd", "contactName": "Dave Smith",
-  "toEmail": "dave@acme.co.uk", "services": ["it_support","voip_telephony"] }
-```
-→ `200 { id, services, skipped, sendAfter }`
-
-Queues rather than sends — the row waits out the 10-second undo window. `services`
-is what will actually go out; `skipped` is anything dropped as already sent.
-
-→ `409 { error }` where error is one of `suppressed`, `already_sent`,
-`no_services`, `invalid_services`, `no_email`, `no_company`. **These are not
-retryable** — each one is something the salesperson needs to see.
-
-### `POST /cancel`
-```json
-{ "id": "<id from /send>" }
-```
-→ `200 { ok: true }` · `409 { error: "too_late" }`
-
-The undo button. Once a worker has claimed the row the email is with SES and
-cannot be recalled — hence the window.
-
-### `POST /cancel-followups`
-```json
-{ "externalCompanyId": "…", "reason": "moved to dead stage" }
-```
-→ `200 { ok: true, cancelled: <n> }`
-
-Call from WorkTrackr's contacts PUT whenever a company moves to `dead` or
-`customer`. Fire-and-forget: log failures, never block the stage change.
-
-### `GET /status?externalCompanyId=…&email=…`
-→ `{ history: [...], sentServices: ["it_support"], suppressed: false }`
-
-Authoritative view. WorkTrackr keeps its own mirror table for render speed;
-this is for reconciliation and for the timeline entry.
-
-### `GET /unsubscribe?e=…&t=…` — **public, no auth**
-The recipient's opt-out link. Token is an HMAC of the address so the link can't
-be edited to opt out a third party. Auth on this router is applied **per route,
-not router-wide**, precisely so this stays reachable.
+Studio ships **12 placeholder services** (`service-01` … `service-12`) so the
+panel has something to render before the real names are decided. Rename the
+labels; leave the keys.
 
 ---
 
-## Behaviour
+## Still to build on Studio
 
-**Dedupe.** Uniqueness is `(company, address, service)`. Same service to a
-different address is allowed; a different service to the same address is
-allowed; the exact combination is not. Follow-ups are excluded from the check —
-a follow-up isn't a new offer.
+In rough order:
 
-**Undo.** Rows are created `queued` with `send_after = now + 10s`. A `setTimeout`
-fires the send; the ticker sweeps anything whose timeout was lost to a restart.
-Both paths claim the row with a conditional `UPDATE … WHERE status='queued'`, so
-it can only send once.
+1. **Settings screen** — rename labels, set order, activate/deactivate, and map
+   each service to an email list.
+2. **`POST /send`** — send through SES from the Sweetbyte domain, honouring a
+   **10-second undo window** before the message actually leaves, and returning
+   `{ id, services, skipped, sendAfter }`. Must return **409** with an `already`
+   payload when a service has already gone to that address, since WorkTrackr
+   passes that through to the salesperson as an answer rather than an error.
+3. **`POST /cancel`** — cancel within the undo window. Studio is the authority:
+   if the email has gone, return an error and let WorkTrackr keep saying so.
+   Silently accepting would leave the salesperson believing an email was pulled
+   back when it wasn't.
+4. **7-day follow-up** — scheduled from the moment the first email is *sent*,
+   not from when it was queued.
+5. **Suppression** — an address that unsubscribes or hard-bounces must never
+   receive another service email.
+6. **`GET /status`** and **`POST /cancel-followups`**.
 
-**Follow-up.** Booked when the initial send succeeds, dated 7 days from the
-actual send rather than from the queue time, so an email delayed by an outage
-doesn't get a follow-up hard on its heels.
+**Open question:** when the follow-up fires, should the contact also be added to
+a campaign list, or does the flow stay purely transactional? Not yet decided.
 
-**Suppression.** Re-checked at send time, not queue time — 7 days is plenty of
-time to opt out between the two emails. An address counts as suppressed if it's
-in `service_email_unsubscribes` **or** in `contact_unsubscribed_all` under any
-email_client. Set `SWEETBYTE_EMAIL_CLIENT_ID` to mirror service-email opt-outs
-back into the campaign side so one opt-out stops everything.
-
-**Copy is the approved brochure wording.** Service blocks come from *Sweetbyte
-Post Call Email Templates*, adapted from the Services A5 Brochure 2026. The
-day-7 follow-up reuses the same approved blocks and changes only the opening
-paragraph — no second set of service claims has been invented. Give a service a
-`followupHtml` to override that.
-
-**No open/click tracking.** Every message is CC'd, so a tracking pixel fires
-from the CC's client and records an "open" the prospect never made. Worse than
-no data. The unsubscribe link is a plain URL and needs no tracking wrapper.
-
----
-
-## Environment
-
-| Var | Required | Default |
-|---|---|---|
-| `WORKTRACKR_SERVICE_EMAIL_SECRET` | **yes** | — |
-| `PUBLIC_URL` | strongly advised | onrender.com host |
-| `SERVICE_EMAIL_FROM` | no | `billy@sweetbyte.co.uk` |
-| `SERVICE_EMAIL_FROM_NAME` | no | `Billy at Sweetbyte` |
-| `SERVICE_EMAIL_SENDER_NAME` | no | `Billy` |
-| `SERVICE_EMAIL_CC` | no | `westley@sweetbyte.co.uk` |
-| `SERVICE_EMAIL_UNDO_SECONDS` | no | `10` |
-| `SERVICE_EMAIL_FOLLOWUP_DAYS` | no | `7` |
-| `SWEETBYTE_EMAIL_CLIENT_ID` | no | unset (no campaign-side mirror) |
-
-`SERVICE_EMAIL_FROM_NAME` **must be ASCII.** `buildRawEmail()` RFC 2047-encodes
-the Subject but writes the From display name raw, so an em dash or accent there
-produces a malformed header.
-
----
-
-## Schema
-
-Declared in `server/services/service-email-sender.js`, not `server/db.js`. Deliberate:
-db.js is 2,100 lines shared by every feature, so appending to it means reissuing
-the whole file for a two-table change. Same `CREATE TABLE IF NOT EXISTS`
-at-import pattern, smaller blast radius. Fold them in if this feature grows.
-
-- `service_email_sends` — one row per email. Status:
-  `queued → sending → sent | cancelled | suppressed | failed`
-- `service_email_unsubscribes` — opt-outs, keyed by lowercased address
-
----
-
-## Known gaps
-
-1. **A reply does not cancel the follow-up.** `imap-poller.js` auto-unsubscribes
-   on reply, but only for rows matched to a campaign *subscriber*. Service-email
-   recipients aren't subscribers, so nothing matches and the follow-up still
-   goes. Fixable by having the poller check `service_email_sends` by recipient
-   address on unmatched replies. Not built.
-2. **SQLite durability.** Follow-ups live on the Render disk for 7 days. They
-   survive restarts and deploys, not disk loss.
-3. **DNS.** Until the Sweetbyte domain points at Render, unsubscribe links use
-   the onrender.com host. Set `PUBLIC_URL` now and change it when DNS lands;
-   links are built at send time, so nothing stored goes stale — the only oddity
-   is an initial and follow-up email carrying different link hosts if the switch
-   happens mid-window.
-
----
-
-## Phase 2 — WorkTrackr (not built)
-
-1. `service_email_sends` mirror table in Postgres for chip state without a
-   round-trip.
-2. `web/routes/service-emails.js` — signs and proxies to Studio; writes a
-   `contact_notes` row with `kind='email'` so the send lands on the company
-   timeline.
-3. Panel in `CompanyProfile.jsx`, Overview column: address input prefilled from
-   `contacts.email`, chip grid from `/catalogue`, one Send button, toast with a
-   10-second Undo. Chips for services already sent to that address render ticked
-   and disabled.
-4. Hook the contacts PUT route: on stage change to `dead` or `customer`, call
-   `/cancel-followups`.
-
-**Sub-component rule applies** — every piece of the panel must be defined at
-module level, never inside `CompanyProfile`'s function body, or the address
-input loses focus on every keystroke.
+**Deliverability note:** `sweetbyte.co.uk` is a young sending domain with a small
+list and very little history. Cold-call addresses, typed by ear, are exactly the
+input that produces hard bounces, and hard bounces on a young domain are
+expensive. Worth an approval step before addresses reach a sending list, and
+worth starting at low volume.
