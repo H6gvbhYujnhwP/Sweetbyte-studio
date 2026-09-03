@@ -2,347 +2,349 @@
  * server/services/service-email-templates.js — Content blocks for WorkTrackr
  * service emails.
  *
- * SOURCE: "Sweetbyte Post Call Email Templates" (adapted from the Sweetbyte
- * Services A5 Brochure 2026). The service copy below is the approved wording —
- * treat it as content owned by the business, not as code. Editing the `html`
- * strings is expected; editing anything else is not.
+ * SOURCE: "Sweetbyte Email Campaigns — 12 Revised". This is the approved
+ * wording. Treat it as content owned by the business, not as code: editing the
+ * copy strings is expected, editing the structure around them is not.
  *
- * ASSEMBLY, per the source document:
- *   shared opening (once) → service block per selection → shared close (once)
+ * HOW THE SOURCE IS STRUCTURED, AND WHY THAT MATTERS
+ * Each of the twelve campaigns in the source is a COMPLETE email — its own
+ * greeting, its own sign-off. That is exactly right when one service is sent,
+ * and impossible when two are: concatenating two complete emails would greet
+ * the reader twice and sign off twice.
  *
- * That structure is why services are BLOCKS rather than whole emails. Selecting
- * three services produces one email with three blocks and a single greeting and
- * sign-off, rather than three emails or three repeated greetings.
+ * So each campaign is stored in four parts:
+ *   openingLine — the "thanks for taking my call…" sentence, naming the service
+ *   body        — the substance, one or more paragraphs
+ *   cta         — the "if you'd like a chat…" close
+ * and a shared greeting and signature sit around them.
  *
- * ORDER: blocks render in the order the user selected them, because the source
- * document says to keep the customer's highest-interest service first. The
- * first chip tapped therefore leads the email. This is a change from the
- * earlier canonical ordering.
+ * SENDING ONE SERVICE reproduces the source email verbatim: greeting +
+ * openingLine + body + cta + signature. Word for word what was approved.
  *
- * FOLLOW-UP (day 7): the source document supplies initial copy only. Rather
- * than invent a second set of service claims — which would be marketing copy
- * written by a machine and attributed to Sweetbyte — the follow-up reuses the
- * approved service blocks verbatim and changes only the opening paragraph. The
- * recipient gets the same accurate information with an acknowledgement that
- * it's a second approach. To use bespoke follow-up copy later, give a service a
- * `followupHtml` and it will be used instead.
+ * SENDING SEVERAL uses a shared opening that names them, then each body under
+ * its own heading, then one shared close and one signature. The approved
+ * substance is untouched; only the connective tissue is replaced, because the
+ * source has no wording for a combined email and inventing per-service variants
+ * would mean putting words in Sweetbyte's mouth.
  *
- * Tokens (from the source document):
- *   {{FirstName}}    — contact's first name, or "there" when unknown
- *   {{CompanyName}}  — the company name from WorkTrackr
+ * FOLLOW-UP (day 7): the source supplies initial copy only. The follow-up
+ * reuses the approved bodies verbatim and changes only the opening, for the
+ * same reason. To give a service bespoke follow-up wording later, add a
+ * `followupBody` and it will be used instead.
+ *
+ * Tokens:
+ *   [NAME]           — contact's first name, or "there" when unknown
  *   {{SenderName}}   — the Sweetbyte team member sending
+ *   {{CompanyName}}  — available, though the approved copy does not use it
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared opening, close and signature
+// Shared wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-const OPENING_INITIAL = `
-  <p>Hi {{FirstName}},</p>
-  <p>It was great speaking with you earlier. As promised, I've put together a
-  little more information about the Sweetbyte services we discussed and how they
-  could support your business.</p>
+const GREETING = `<p>Hi [NAME],</p>`;
+
+// Used in place of the per-service opening when more than one is selected.
+// "{{ServiceList}}" is replaced with the selected labels, e.g.
+// "IT Support and Cyber Security" or "IT Support, Backup Solutions and VoIP".
+const OPENING_MULTI = `
+  <p>Thanks for taking my call earlier. As promised, I just wanted to send over
+  a little more information about our {{ServiceList}} services.</p>
 `;
 
-// Day-7 variant. Same voice, acknowledges the earlier email, makes no new claims.
-const OPENING_FOLLOWUP = `
-  <p>Hi {{FirstName}},</p>
-  <p>I got in touch last week after we spoke, and I wanted to follow up in case
-  the timing is better now. I've included the same information below so it's all
-  in one place.</p>
+const OPENING_FOLLOWUP_SINGLE = `
+  <p>I got in touch last week after we spoke about our {{ServiceList}} services,
+  and I wanted to follow up in case the timing is better now. I've included the
+  same information below so it's all in one place.</p>
 `;
 
-const CLOSE = `
-  <p style="margin-top:24px;">If you'd like to talk through your requirements,
-  compare options or arrange a quotation, simply reply to this email or call us
-  on 01702 540776. We'd be happy to help, with no pressure or obligation.</p>
+const OPENING_FOLLOWUP_MULTI = OPENING_FOLLOWUP_SINGLE;
+
+// Replaces the per-service close on a combined email.
+const CTA_MULTI = `
+  <p>If you'd like to have a chat about any of the above, just reply to this
+  email or give me a call. Otherwise, hopefully the information is useful.</p>
+`;
+
+const SIGNATURE = `
   <p>Kind regards,</p>
-  <p><strong>{{SenderName}}</strong></p>
-  <p style="margin:0;">Sweetbyte Ltd<br>
-  01702 540776 &nbsp;|&nbsp; support@sweetbyte.co.uk &nbsp;|&nbsp;
+  <p style="margin:0;">{{SenderName}}<br>
+  Sweetbyte<br>
+  01702 540776<br>
   <a href="https://www.sweetbyte.co.uk">www.sweetbyte.co.uk</a></p>
 `;
 
-// Used when more than one service is selected, per the document's subject rules.
-const SUBJECT_MULTI = 'Following our conversation - information for {{CompanyName}}';
-
-// The document gives no follow-up subject rule. One consistent line for every
-// day-7 email, single or multi, so a follow-up is recognisable as one.
-const SUBJECT_FOLLOWUP = 'Following up - information for {{CompanyName}}';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Service catalogue
-// ─────────────────────────────────────────────────────────────────────────────
-// `key` matches the "Service ID" in the source document. These are written to
-// the database and to WorkTrackr's mirror table, and the dedupe rule is keyed
-// on them, so renaming one orphans every historical send. Treat as permanent.
+// The source gives no subject for a combined email, nor for any follow-up.
 //
-// `order` is presentation order for the chip grid only. It does NOT control
-// block order in the email — selection order does.
+// A combined subject NAMES the services, because "Following Our Conversation"
+// tells the reader nothing they couldn't guess and gives them no reason to
+// open it. "A Quick Overview of Our IT Support and VoIP Telephony" does, and it
+// borrows the phrasing of campaign 1 so it sounds like the rest of the set.
+//
+// LENGTH GUARD: most mail clients truncate a subject around 60 characters, and
+// phones can cut at 35. Three long service names blow straight past that and
+// the reader sees a sentence with its point chopped off — worse than a short
+// generic line. So when the named version gets too long, it falls back.
+const SUBJECT_MULTI_PREFIX = 'Information on ';
+const SUBJECT_MULTI_FALLBACK = 'Information on the Services We Discussed';
+
+// Follow-ups name the services too, for the same reason.
+const SUBJECT_FOLLOWUP_PREFIX = 'Following Up on ';
+const SUBJECT_FOLLOWUP_FALLBACK = 'Following Up on Our Conversation';
+
+// Cap set at 70, not 60. A named subject that truncates still shows the reader
+// something useful — "Information on IT Support, Cyber Secu…" beats a generic
+// line that names nothing. The fallback is for genuinely unwieldy selections
+// (four or more), where truncation would leave the last service dangling
+// mid-word and the subject looking broken rather than merely cut.
+const SUBJECT_MULTI_MAX = 70;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaigns
+// ─────────────────────────────────────────────────────────────────────────────
+// `key` is written to the database and to WorkTrackr's mirror table, and the
+// dedupe rule is keyed on it, so renaming one orphans every historical send.
+// Treat these as permanent.
+//
+// `order` is the order of the chips in WorkTrackr and follows the source
+// document's numbering. It does NOT control block order in a combined email —
+// selection order does, so the customer's main interest leads.
 
 export const SERVICES = [
   {
-    key: 'about_sweetbyte',
-    heading: 'About Sweetbyte',
-    label: 'About Sweetbyte',
-    order: 0,
-    subject: 'A little more about Sweetbyte',
-    html: `
-      <p>Sweetbyte is a Rayleigh-based technology partner providing
-      enterprise-level IT support and services to SME businesses, typically with
-      5-100 staff. With more than 25 years of experience, we combine established
-      technical expertise with practical, forward-thinking solutions.</p>
-      <p>We are more than a helpdesk. Our aim is to understand the business
-      behind the technology, provide tailored advice and support growth with
-      systems that are reliable, secure and appropriate for the organisation.</p>
-      <p>Customers choose Sweetbyte for responsive local support, consistent
-      service levels and flexibility. We do not rely on lengthy contracts to
-      retain customers - our focus is on earning loyalty through the quality of
-      the service we provide.</p>
-    `,
-  },
-  {
     key: 'it_support',
-    heading: 'IT support packages',
-    label: 'IT support packages',
+    label: 'IT Support',
+    heading: 'IT Support',
     order: 1,
-    subject: 'Friendly, flexible IT support for {{CompanyName}}',
-    html: `
-      <p>Sweetbyte provides enterprise-level IT support for SME businesses,
-      backed by more than 25 years of experience and a local team. Our support is
-      designed to be flexible, with three-month rolling arrangements rather than
-      lengthy commitments.</p>
-      <p>Reactive support covers break/fix issues, incidents, user requests,
-      troubleshooting and problem resolution. Proactive support adds real-time
-      monitoring, system health checks, security alerts, patch management,
-      performance optimisation and preventative maintenance.</p>
-      <p>Packages range from Silver for unlimited remote and reactive support,
-      through Gold for combined reactive and proactive cover with monitoring and
-      included onsite time, to Your Very Own IT Department for organisations
-      wanting a more complete outsourced IT function, including strategic
-      planning and an account manager. We can help identify the right level
-      rather than selling unnecessary cover.</p>
+    subject: 'A Quick Overview of Our IT Support',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our IT Support services.</p>`,
+    body: `
+      <p>We provide IT support for businesses of around 5-100 staff, covering
+      day-to-day technical support, troubleshooting, security and ongoing
+      management. We're a local Rayleigh-based company with over 25 years'
+      experience, and we don't tie customers into lengthy contracts.</p>
+      <p>The aim is simply to make sure you have reliable IT support when you
+      need it, without unnecessary complication.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current setup, just reply to this
+      email or give me a call. Otherwise, hopefully the information is useful.</p>`,
   },
   {
     key: 'cyber_security',
-    heading: 'Cyber security',
-    label: 'Cyber security solutions',
+    label: 'Cyber Security',
+    heading: 'Cyber Security',
     order: 2,
-    subject: 'Strengthening cyber security at {{CompanyName}}',
-    html: `
-      <p>Sweetbyte provides layered cyber security for small and medium-sized
-      businesses. This can include managed antivirus and anti-malware, ransomware
-      protection, email security with spam and phishing filtering, and support
-      towards Cyber Essentials certification.</p>
-      <p>Cyber Essentials helps demonstrate that recognised, industry-standard
-      security controls are in place. It can strengthen customer confidence and
-      may be required when working with particular organisations or supply
-      chains.</p>
-      <p>We can also provide secure password and document protection with
-      zero-knowledge architecture, two-factor authentication, health checks and
-      mobile access. Setup and training are available so users understand how to
-      adopt the tools properly, rather than simply being given another piece of
-      software.</p>
+    subject: 'A Quick Overview of Our Cyber Security Services',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our Cyber Security services.</p>`,
+    body: `
+      <p>We help businesses with managed antivirus and anti-malware, ransomware
+      protection, email and phishing protection, Cyber Essentials, password
+      management, document protection and 2FA.</p>
+      <p>The aim is simply to make sure your business has the right protection in
+      place without adding unnecessary complexity.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current setup, just reply to this
+      email or give me a call. Otherwise, hopefully the information is useful.</p>`,
   },
   {
-    key: 'voip_telephony',
-    heading: 'VoIP telephony',
-    label: 'VoIP telephony',
+    key: 'business_internet',
+    label: 'Business Internet',
+    heading: 'Business Internet',
     order: 3,
-    subject: 'Flexible business telephony from Sweetbyte',
-    html: `
-      <p>Sweetbyte's VoIP service gives your team a flexible business phone
-      system that can scale as people join, move or work remotely. Users can
-      switch between a desk phone, mobile app and PC softphone, helping them stay
-      reachable wherever they are working.</p>
-      <p>Features such as call recording, auto-attendants and voicemail-to-email
-      are included as standard, supported by a 99.9% uptime guarantee and local
-      UK-based support. Flexible monthly plans mean users can be added or removed
-      without lengthy contracts.</p>
-      <p>We can supply entry-level, mid-range, executive and cordless handsets,
-      plus wired or wireless headsets. Professional welcome messages, menu
-      prompts, on-hold marketing and out-of-hours announcements are also
-      available, with voice-only recordings from £50 and voice with background
-      music from £99 for up to 50 words.</p>
+    subject: 'A Look at Our Business Internet Options',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I wanted to send over a
+      little more information about our Business Internet services.</p>`,
+    body: `
+      <p>We can provide business broadband, fibre, leased lines and dedicated
+      high-speed connections, along with 4G/5G backup and automatic failover
+      where required.</p>
+      <p>This can be useful for businesses where a reliable internet connection
+      is important for cloud systems, phones, remote working and everyday
+      operations.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current connection or options
+      available, just reply to this email or give me a call. Otherwise, hopefully
+      the information is useful.</p>`,
   },
   {
-    key: 'internet_wifi',
-    heading: 'Internet lines &amp; Wi-Fi',
-    label: 'Internet lines & Wi-Fi',
+    key: 'managed_wifi',
+    label: 'Managed Wi-Fi',
+    heading: 'Managed Wi-Fi',
     order: 4,
-    subject: 'Reliable internet and Wi-Fi for {{CompanyName}}',
-    html: `
-      <p>Sweetbyte provides business connectivity designed around your location,
-      team size and reliance on online systems. Options include cost-effective
-      FTTC and FTTP broadband, dedicated leased lines with symmetrical 1Gbps+
-      speeds and 4G/5G automatic failover to help keep the business online if the
-      main connection fails.</p>
-      <p>We also design and manage business-grade Wi-Fi. High-capacity access
-      points support busy offices, seamless roaming helps users move around
-      without dropped connections, and secure guest networks keep visitors
-      separated from important business data.</p>
-      <p>Our managed Wi-Fi design includes a 100% coverage guarantee, with the
-      network planned to eliminate dead zones. We can review your current
-      connection and wireless coverage, then recommend an appropriate solution
-      without overspecifying it.</p>
+    subject: 'A Quick Look at Business Wi-Fi',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our Managed Wi-Fi service.</p>`,
+    body: `
+      <p>We provide business-grade Wi-Fi designed for reliable coverage
+      throughout the workplace, with seamless roaming, secure guest networks and
+      support for busy environments.</p>
+      <p>We can also help identify and eliminate Wi-Fi dead zones, so staff and
+      visitors can get a consistent connection where they need it.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current Wi-Fi setup, just reply to
+      this email or give me a call. Otherwise, hopefully the information is
+      useful.</p>`,
+  },
+  {
+    key: 'website_design',
+    label: 'Website Design',
+    heading: 'Website Design',
+    order: 5,
+    subject: 'A Little More About Our Website Design',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our Website Design services.</p>`,
+    body: `
+      <p>We create bespoke, mobile-friendly websites for businesses, including
+      e-commerce sites, with SEO, secure hosting and ongoing maintenance
+      available as part of the service.</p>
+      <p>We can also look after the technical side, including domains, DNS, SSL
+      and security updates, so everything is kept together in one place.</p>
+    `,
+    cta: `<p>If you'd like to have a chat about your current website or what you might
+      need, just reply to this email or give me a call. Otherwise, hopefully the
+      information is useful.</p>`,
+  },
+  {
+    key: 'domain_hosting',
+    label: 'Domain & Hosting',
+    heading: 'Domain &amp; Hosting',
+    order: 6,
+    subject: 'Website Hosting, Domains & Maintenance',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I wanted to send over a
+      little more information about our Domain &amp; Hosting services.</p>`,
+    body: `
+      <p>We can take care of domain registration, secure hosting, SSL
+      certificates, DNS and ongoing website updates and maintenance.</p>
+      <p>It means the technical side of your website can be managed for you, with
+      regular maintenance and security updates helping to keep things running
+      smoothly.</p>
+    `,
+    cta: `<p>If you'd like to discuss your current hosting or domain setup, just reply
+      to this email or give me a call. Otherwise, hopefully the information is
+      useful.</p>`,
   },
   {
     key: 'backup_solutions',
-    heading: 'Backup solutions',
-    label: 'Backup solutions',
-    order: 5,
-    subject: 'Protecting {{CompanyName}} with managed backups',
-    html: `
-      <p>A reliable backup should do more than store a second copy of your data -
-      it should be monitored, protected and ready to restore when you need it.
-      Sweetbyte provides fully managed onsite and cloud backup solutions for
-      business systems.</p>
-      <p>On-premise protection can cover NAS devices, Windows servers and PCs,
-      with local redundancy to support fast recovery. Cloud backup can protect
-      Microsoft 365 data including mailboxes, SharePoint and Teams, using secure
-      offsite storage and encrypted data transfer.</p>
-      <p>Our service includes continuous monitoring, daily automated reporting
-      and rapid remote restoration. If a backup fails, we investigate and fix it
-      rather than leaving your team to discover the problem during an
-      emergency.</p>
-    `,
-  },
-  {
-    key: 'office_365',
-    heading: 'Microsoft 365',
-    label: 'Office 365',
-    order: 6,
-    subject: 'Making Microsoft 365 easier for your team',
-    html: `
-      <p>Sweetbyte supplies and fully manages Microsoft 365 for businesses,
-      including setup, user management and troubleshooting. This gives your team
-      access to familiar tools while removing the day-to-day administration from
-      your workload.</p>
-      <p>Business Basic includes web and mobile versions of Word, Excel and
-      PowerPoint, a 50GB Exchange mailbox, 1TB OneDrive, Teams and SharePoint.
-      Business Standard adds the desktop applications and offline access for
-      office-based users who need the full experience.</p>
-      <p>For organisations with more advanced requirements, Microsoft 365 E3 can
-      provide 100GB mailboxes, expanded OneDrive capacity, information
-      protection, rights management and device management through Microsoft
-      Intune. We can recommend a suitable licence mix rather than putting every
-      user on the same plan.</p>
-    `,
-  },
-  {
-    key: 'domains_websites',
-    heading: 'Domain names &amp; websites',
-    label: 'Domain names & websites',
+    label: 'Backup Solutions',
+    heading: 'Backup Solutions',
     order: 7,
-    subject: 'Domains, websites and ongoing management',
-    html: `
-      <p>Sweetbyte can look after the complete lifecycle of your business
-      website, from domain registration and DNS management to secure hosting, SSL
-      certificates, updates and ongoing maintenance.</p>
-      <p>For a new site, we offer bespoke web design including e-commerce
-      websites, mobile-responsive layouts and SEO optimisation. Secure hosting
-      and SSL are included in the overall approach, with ongoing security updates
-      available to keep the site maintained after launch.</p>
-      <p>If you already have a website, we can manage the technical work behind
-      it so your team does not have to. Hosting options can be matched to the
-      size and performance needs of the site, including increased storage, faster
-      loading, advanced security, unlimited bandwidth and priority support where
-      required.</p>
+    subject: 'A Quick Look at Business Backup',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our Backup Solutions.</p>`,
+    body: `
+      <p>We provide both onsite and cloud backup, covering areas such as PCs,
+      Windows servers, Microsoft 365 mailboxes, SharePoint and Teams. Backups are
+      monitored and reported on, with secure offsite storage and fast remote
+      restoration available.</p>
+      <p>The idea is to give businesses a straightforward, fully managed way of
+      protecting important data and being able to restore it when needed.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current backup arrangements, just
+      reply to this email or give me a call. Otherwise, hopefully the information
+      is useful.</p>`,
   },
   {
-    key: 'automation_services',
-    heading: 'Automation services',
-    label: 'Automation services',
+    key: 'microsoft_365',
+    label: 'Microsoft 365',
+    heading: 'Microsoft 365',
     order: 8,
-    subject: 'A simpler way to automate repetitive work',
-    html: `
-      <p>Sweetbyte creates smart workflows that automate repetitive tasks such as
-      data entry, invoicing, scheduling and order processing. The aim is
-      straightforward: reduce manual effort, lower the chance of human error and
-      give your team more time for higher-value work.</p>
-      <p>We look at the systems and steps you already use, identify where
-      information is being copied or delayed, and build a workflow around your
-      business. This can include moving information between systems, triggering
-      notifications, updating records and completing routine actions
-      automatically.</p>
-      <p>Automation can save businesses significant time each week - one customer
-      saved £25,000 per year by automating order processing. Actual results
-      depend on the process, but we can assess the opportunity and explain what
-      is realistic before anything is built.</p>
+    subject: 'Getting More From Microsoft 365',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I wanted to send over a
+      little more information about our Microsoft 365 services.</p>`,
+    body: `
+      <p>We can help with Microsoft 365 setup and management, including Exchange
+      email, OneDrive, Teams and SharePoint, as well as user management and
+      troubleshooting.</p>
+      <p>We also support Microsoft 365 plans ranging from Business Basic and
+      Standard through to Enterprise E3, depending on what your business
+      needs.</p>
     `,
+    cta: `<p>If you'd like to discuss your current Microsoft 365 setup, just reply to
+      this email or give me a call. Otherwise, hopefully the information is
+      useful.</p>`,
   },
   {
-    key: 'custom_app_development',
-    heading: 'Custom app development',
-    label: 'Custom app development',
+    key: 'voip_telephony',
+    label: 'VoIP Telephony',
+    heading: 'VoIP Telephony',
     order: 9,
-    subject: 'A custom app built around {{CompanyName}}',
-    html: `
-      <p>Sweetbyte designs custom-built apps around the way a business actually
-      works. Rather than forcing your team to adapt to generic software, we can
-      create a practical system for your processes, information and day-to-day
-      tasks.</p>
-      <p>A tailored app can bring information into one place, simplify data
-      entry, connect separate stages of a workflow and give your team clearer
-      visibility of what needs to happen next. It may support internal
-      operations, customer requests, order processing, scheduling, reporting or
-      another process that currently relies on spreadsheets, emails or repeated
-      manual work.</p>
-      <p>We start by understanding the process, where time is being lost and what
-      a useful result looks like. The solution is then shaped around your
-      requirements, with the aim of making work quicker, more consistent and
-      easier to manage.</p>
+    subject: 'A Look at Our VoIP Telephone Service',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our VoIP Telephone services.</p>`,
+    body: `
+      <p>Our VoIP system allows businesses to use desk phones, mobiles and PCs,
+      with features such as call recording, auto-attendant, voicemail-to-email
+      and flexible monthly plans.</p>
+      <p>It can make it much easier for staff to work from different locations
+      while keeping a professional business phone system.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current phone system or options
+      available, just reply to this email or give me a call. Otherwise, hopefully
+      the information is useful.</p>`,
   },
   {
-    key: 'marketing_services',
-    heading: 'Marketing services',
-    label: 'Marketing services',
+    key: 'custom_apps_automation',
+    label: 'Custom Apps & Automation',
+    heading: 'Custom Apps &amp; Automation',
     order: 10,
-    subject: 'Helping {{CompanyName}} reach more customers',
-    html: `
-      <p>Sweetbyte can support your online growth through social media, email
-      marketing and website marketing. The service can be tailored around whether
-      you want to build awareness, create enquiries, nurture existing contacts or
-      improve the return from your website.</p>
-      <p>Social media support can include content planning, regular posting,
-      professional graphics and copywriting, community management and monthly
-      reporting. Email marketing can include mobile-friendly newsletters,
-      automated nurture campaigns, audience segmentation and reporting on opens,
-      clicks and conversions.</p>
-      <p>For website growth, we offer search engine optimisation, pay-per-click
-      advertising, content marketing and transparent analytics. We can discuss
-      which channels suit your audience and goals rather than treating every
-      platform as essential.</p>
+    subject: 'Could Automation Help With Your Processes?',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I wanted to send over a
+      little more information about our Custom Apps &amp; Automation services.</p>`,
+    body: `
+      <p>We build bespoke apps and workflows to help automate repetitive tasks
+      such as data entry, invoicing, scheduling and order processing.</p>
+      <p>The idea is to remove some of the manual work from everyday processes,
+      reduce human error and give staff more time to concentrate on other
+      things.</p>
     `,
+    cta: `<p>If you'd like to talk through a process that currently takes up a lot of
+      time, just reply to this email or give me a call. Otherwise, hopefully the
+      information is useful.</p>`,
   },
   {
-    key: 'password_document_protection',
-    heading: 'Password &amp; document protection',
-    label: 'Password & document protection',
+    key: 'email_marketing',
+    label: 'Email Marketing',
+    heading: 'Email Marketing',
     order: 11,
-    subject: 'A safer way to manage passwords and documents',
-    html: `
-      <p>Sweetbyte's password and document protection service gives your team one
-      secure place to create, store and share passwords and important
-      documentation.</p>
-      <p>The solution uses zero-knowledge architecture and includes two-factor
-      authentication. Real-time health checks help identify areas that need
-      attention, while secure mobile access means authorised users can reach the
-      information they need when they are away from their desk.</p>
-      <p>Setup and training are £49 per workstation or user. This includes help
-      creating the user account, configuring multi-factor authentication and
-      showing the user how to work with the system securely.</p>
+    subject: 'A Little More About Email Marketing',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I just wanted to send over
+      a little more information about our Email Marketing services.</p>`,
+    body: `
+      <p>We can help with professional newsletters, automated campaigns and drip
+      sequences, audience segmentation and reporting, giving you a more organised
+      way to keep in touch with customers and prospects.</p>
+      <p>Everything can be tailored around your audience and the type of
+      communication you want to send.</p>
     `,
+    cta: `<p>If you'd like to have a chat about your current email marketing, just reply
+      to this email or give me a call. Otherwise, hopefully the information is
+      useful.</p>`,
+  },
+  {
+    key: 'voice_greetings',
+    label: 'Professional Voice & Greetings',
+    heading: 'Professional Voice &amp; Telephone Greetings',
+    order: 12,
+    subject: 'A More Professional Sound for Your Phone System',
+    openingLine: `<p>Thanks for taking my call earlier. As promised, I wanted to send over a
+      little more information about our Professional Voice &amp; Telephone
+      Greetings service.</p>`,
+    body: `
+      <p>We provide professionally recorded welcome messages, IVR prompts,
+      voicemail messages, on-hold marketing and out-of-hours messages for
+      business phone systems.</p>
+      <p>The recordings can be supplied with professional voice only or with
+      voice and music, helping give callers a more polished experience when they
+      contact your business.</p>
+    `,
+    cta: `<p>If you'd like to discuss what you currently have in place, just reply to
+      this email or give me a call. Otherwise, hopefully the information is
+      useful.</p>`,
   },
 ];
 
-// Fast lookup by key. Built once at module load.
 const BY_KEY = new Map(SERVICES.map(s => [s.key, s]));
 
 export function getService(key) {
@@ -355,9 +357,8 @@ export function isValidServiceKey(key) {
 
 /**
  * Public catalogue for WorkTrackr's chip grid. WorkTrackr reads this over the
- * wire instead of hardcoding its own copy of the list — one source of truth, so
- * adding a service here makes the chip appear in WorkTrackr without a second
- * deploy.
+ * wire rather than holding its own copy — one source of truth, so changing a
+ * label here changes the chip without redeploying WorkTrackr.
  */
 export function getCatalogue() {
   return SERVICES
@@ -367,13 +368,10 @@ export function getCatalogue() {
 }
 
 /**
- * Normalise and validate a requested selection.
+ * Normalise and validate a selection.
  *
- * Deliberately does NOT sort: the source document says to keep the customer's
- * highest-interest service first, so selection order is meaningful and is
- * preserved all the way through to the rendered email.
- *
- * Returns { keys, invalid } — deduped, order preserved.
+ * Deliberately does NOT sort: selection order is meaningful, so the service the
+ * customer was most interested in leads the email.
  */
 export function normaliseServiceKeys(input) {
   const raw = Array.isArray(input) ? input : [];
@@ -410,59 +408,83 @@ function firstName(contactName) {
   return n.split(/\s+/)[0] || 'there';
 }
 
+// "A" · "A and B" · "A, B and C" — the way a person would write it.
+function listServices(labels) {
+  if (labels.length === 0) return 'our';
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
 function applyTokens(text, vars) {
   return String(text)
-    .replace(/\{\{FirstName\}\}/g, escapeHtml(vars.firstName))
+    .replace(/\[NAME\]/g, escapeHtml(vars.firstName))
+    .replace(/\{\{SenderName\}\}/g, escapeHtml(vars.senderName))
     .replace(/\{\{CompanyName\}\}/g, escapeHtml(vars.companyName))
-    .replace(/\{\{SenderName\}\}/g, escapeHtml(vars.senderName));
+    .replace(/\{\{ServiceList\}\}/g, vars.serviceList);
 }
 
-// Subject lines are plain text, not HTML — escaping here would put "&amp;" in
-// the inbox for a company called "Smith & Sons".
+// Subjects are plain text — escaping here would put "&amp;" in the inbox.
 function applyTokensPlain(text, vars) {
   return String(text)
-    .replace(/\{\{FirstName\}\}/g, vars.firstName)
-    .replace(/\{\{CompanyName\}\}/g, vars.companyName)
-    .replace(/\{\{SenderName\}\}/g, vars.senderName);
+    .replace(/\[NAME\]/g, vars.firstName)
+    .replace(/\{\{SenderName\}\}/g, vars.senderName)
+    .replace(/\{\{CompanyName\}\}/g, vars.companyName);
 }
 
-function buildVars({ companyName, contactName, senderName }) {
+function buildVars({ companyName, contactName, senderName, serviceList }) {
   return {
     firstName: firstName(contactName),
     companyName: companyName || 'your business',
-    senderName: senderName || 'Sweetbyte',
+    senderName: senderName || 'Billy',
+    serviceList: serviceList || '',
   };
 }
 
 /**
- * Subject line, per the source document's rules:
- *   one service   → that service's suggested subject
- *   several       → the shared multi-service line
+ * Subject line.
+ *   one service   → that campaign's own subject, exactly as approved
+ *   several       → the shared combined line
  *   any follow-up → the shared follow-up line
  */
 export function buildSubject(serviceKeys, step, { companyName, contactName, senderName } = {}) {
   const vars = buildVars({ companyName, contactName, senderName });
   const keys = Array.isArray(serviceKeys) ? serviceKeys : [];
+  const chosen = keys.map(k => BY_KEY.get(k)).filter(Boolean);
 
-  if (step === 2) return applyTokensPlain(SUBJECT_FOLLOWUP, vars);
-
-  if (keys.length === 1) {
-    const svc = BY_KEY.get(keys[0]);
-    if (svc) return applyTokensPlain(svc.subject, vars);
+  // A single service keeps its own approved subject, exactly as written.
+  if (step !== 2 && chosen.length === 1) {
+    return applyTokensPlain(chosen[0].subject, vars);
   }
-  return applyTokensPlain(SUBJECT_MULTI, vars);
+
+  const list = listServices(chosen.map(s => s.label));
+
+  if (step === 2) {
+    const named = `${SUBJECT_FOLLOWUP_PREFIX}${list}`;
+    return applyTokensPlain(
+      (chosen.length && named.length <= SUBJECT_MULTI_MAX) ? named : SUBJECT_FOLLOWUP_FALLBACK,
+      vars,
+    );
+  }
+
+  const named = `${SUBJECT_MULTI_PREFIX}${list}`;
+  return applyTokensPlain(
+    (chosen.length && named.length <= SUBJECT_MULTI_MAX) ? named : SUBJECT_MULTI_FALLBACK,
+    vars,
+  );
 }
 
 /**
- * Assemble the body: shared opening → selected blocks in selection order →
- * shared close → unsubscribe footer.
+ * Assemble the body.
  *
- * Returns a FRAGMENT, not a whole document — ses.js wraps it with the shared
- * email CSS shell so paragraph spacing matches everything else the platform
- * sends.
+ * ONE service reproduces the approved email exactly.
+ * SEVERAL keeps every approved body and replaces only the connective wording.
  *
- * `unsubUrl` is required. Every one of these goes to someone who has not opted
- * in, so there is always a working opt-out.
+ * Returns a FRAGMENT — ses.js wraps it in the shared email CSS shell so spacing
+ * matches everything else the platform sends.
+ *
+ * `unsubUrl` is required: these go to people who have not opted in, so there is
+ * always a working opt-out.
  */
 export function renderServiceEmail({
   serviceKeys,
@@ -472,43 +494,60 @@ export function renderServiceEmail({
   senderName,
   unsubUrl,
 }) {
-  const vars = buildVars({ companyName, contactName, senderName });
-
   const chosen = (serviceKeys || []).map(k => BY_KEY.get(k)).filter(Boolean);
+  const vars = buildVars({
+    companyName, contactName, senderName,
+    serviceList: listServices(chosen.map(s => s.label)),
+  });
 
-  // Headings appear ONLY when more than one service is selected.
-  //
-  // A single-service email is a letter and reads as one — a heading above a
-  // lone block looks like a brochure page. Merge two or more and the opposite
-  // is true: without a heading the blocks run together as one wall of prose and
-  // the reader cannot see where one service ends and the next begins. Checked
-  // by rendering it, not by guessing.
-  const showHeadings = chosen.length > 1;
+  const single = chosen.length === 1;
+  const isFollowup = step === 2;
 
+  // Headings only when combining. A single-service email is a letter and a
+  // heading above one block makes it look like a brochure page; combine two and
+  // without headings the bodies run together as one wall of prose.
   const blocks = chosen
-    .map(svc => {
+    .map((svc) => {
       const body = applyTokens(
-        (step === 2 && svc.followupHtml) ? svc.followupHtml : svc.html,
+        (isFollowup && svc.followupBody) ? svc.followupBody : svc.body,
         vars,
       );
-      if (!showHeadings) return body;
-      return `<h3 style="margin:26px 0 8px;font-size:15px;font-weight:700;">`
+      if (single) return body;
+      return `<h3 style="margin:24px 0 8px;font-size:15px;font-weight:700;">`
         + `${svc.heading || svc.label}</h3>${body}`;
     })
     .join('\n');
 
-  const opening = applyTokens(step === 2 ? OPENING_FOLLOWUP : OPENING_INITIAL, vars);
-  const close = applyTokens(CLOSE, vars);
+  let opening;
+  if (isFollowup) {
+    opening = applyTokens(single ? OPENING_FOLLOWUP_SINGLE : OPENING_FOLLOWUP_MULTI, vars);
+  } else if (single) {
+    opening = applyTokens(chosen[0].openingLine, vars);
+  } else {
+    opening = applyTokens(OPENING_MULTI, vars);
+  }
+
+  // A single service keeps its own approved close; a combined email uses the
+  // shared one, since twelve near-identical "if you'd like a chat" paragraphs
+  // stacked together would read badly.
+  const cta = applyTokens(single ? chosen[0].cta : CTA_MULTI, vars);
 
   const footer = `
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0 12px;">
     <p style="font-size:12px;color:#6b7280;margin:0;">
-      You're receiving this because we spoke about ${escapeHtml(vars.companyName)}'s
-      requirements. If you'd rather not hear from us again,
+      You're receiving this because we spoke about your requirements. If you'd
+      rather not hear from us again,
       <a href="${escapeHtml(unsubUrl)}" style="color:#6b7280;">unsubscribe here</a>
       and we'll stop contacting you.
     </p>
   `;
 
-  return `${opening}\n${blocks}\n${close}\n${footer}`;
+  return [
+    applyTokens(GREETING, vars),
+    opening,
+    blocks,
+    cta,
+    applyTokens(SIGNATURE, vars),
+    footer,
+  ].join('\n');
 }
