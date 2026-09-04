@@ -59,6 +59,60 @@ const FROM_NAME = process.env.SERVICE_EMAIL_FROM_NAME || 'Billy at Sweetbyte';
 
 // How the sign-off reads inside the body. Free of the ASCII constraint above,
 // since the body is base64-encoded UTF-8.
+// ── Subscriber list mirror ───────────────────────────────────────────────────
+// After a successful send the recipient is added to a list in Studio so the
+// address is visible in the UI rather than living only in service_email_sends.
+//
+// Accepts either a list id or a list name, because Studio's list screen does
+// not put the id in the URL and reading it out of the database is a faff.
+// Unset means the whole feature is off and nothing is written.
+const SERVICE_EMAIL_LIST = (process.env.SERVICE_EMAIL_LIST || '').trim();
+
+function resolveListId() {
+  if (!SERVICE_EMAIL_LIST) return null;
+  const byId = db.prepare('SELECT id FROM email_lists WHERE id = ?').get(SERVICE_EMAIL_LIST);
+  if (byId) return byId.id;
+  // Names are not unique across clients, so refuse rather than guess if more
+  // than one matches — silently mailing the wrong client's list would be bad.
+  const byName = db.prepare('SELECT id FROM email_lists WHERE name = ?').all(SERVICE_EMAIL_LIST);
+  if (byName.length === 1) return byName[0].id;
+  if (byName.length > 1) {
+    console.error(`[service-email] SERVICE_EMAIL_LIST "${SERVICE_EMAIL_LIST}" matches ${byName.length} lists — refusing to guess`);
+    return null;
+  }
+  console.error(`[service-email] SERVICE_EMAIL_LIST "${SERVICE_EMAIL_LIST}" matched no list`);
+  return null;
+}
+
+/**
+ * Add a recipient to the configured list. Never throws: a failure here must not
+ * fail or retry an email that has already left the building.
+ */
+function addToList(email, name) {
+  const listId = resolveListId();
+  if (!listId) return;
+  try {
+    // UNIQUE(list_id, email) makes the second send a no-op rather than a dupe.
+    const r = db.prepare(`
+      INSERT OR IGNORE INTO email_subscribers (id, list_id, email, name, status)
+      VALUES (?, ?, ?, ?, 'subscribed')
+    `).run(uuid(), listId, email, name || null);
+
+    if (r.changes > 0) {
+      db.prepare(`
+        UPDATE email_lists
+           SET subscriber_count = (
+             SELECT COUNT(*) FROM email_subscribers
+              WHERE list_id = ? AND status = 'subscribed'
+           )
+         WHERE id = ?
+      `).run(listId, listId);
+    }
+  } catch (err) {
+    console.error('[service-email] list mirror failed:', err.message);
+  }
+}
+
 const SENDER_NAME = process.env.SERVICE_EMAIL_SENDER_NAME || 'Billy';
 
 // ── Brochure attachment ──────────────────────────────────────────────────────
@@ -249,6 +303,32 @@ export function unsubscribe(email, source = 'service_email') {
     } catch (err) {
       console.error('[service-email] campaign-side unsubscribe mirror failed:', err.message);
     }
+  }
+
+  // Mark them unsubscribed on the mirrored list too. Leaving them showing as
+  // an active subscriber you are not allowed to mail is how someone later
+  // builds a campaign audience that quietly includes opted-out people.
+  try {
+    const listId = resolveListId();
+    if (listId) {
+      const r = db.prepare(`
+        UPDATE email_subscribers
+           SET status = 'unsubscribed', unsubscribed_at = datetime('now')
+         WHERE list_id = ? AND lower(email) = ? AND status != 'unsubscribed'
+      `).run(listId, e);
+      if (r.changes > 0) {
+        db.prepare(`
+          UPDATE email_lists
+             SET subscriber_count = (
+               SELECT COUNT(*) FROM email_subscribers
+                WHERE list_id = ? AND status = 'subscribed'
+             )
+           WHERE id = ?
+        `).run(listId, listId);
+      }
+    }
+  } catch (err) {
+    console.error('[service-email] list unsubscribe mirror failed:', err.message);
   }
 
   const killed = db.prepare(`
@@ -499,6 +579,10 @@ export async function processDue() {
          WHERE id = ?
       `).run(messageId || null, row.id);
       results.sent++;
+
+      // Only after the send actually succeeded — no point listing an address
+      // that SES rejected.
+      addToList(row.to_email, row.contact_name);
 
       if (row.step === 1 && FOLLOWUP_READY) scheduleFollowup(row, services);
     } catch (err) {

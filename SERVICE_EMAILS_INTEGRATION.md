@@ -106,6 +106,49 @@ reach anyone. Flip it to true in the same commit that fills in
 should ride along on the follow-up is undecided; it currently would not, since
 only step 1 attaches.
 
+### The contact name
+
+Three sources, in order of preference:
+
+1. What the caller typed into the **Their name (optional)** box on the panel.
+2. The company's `primary_contact` in WorkTrackr.
+3. Nothing — the body opens "Hi there," and the subject drops the name.
+
+The typed name is the only field taken from the request body; the company name
+is always read from the database, because the client should not be able to put
+someone else's company on an email. A mistyped first name is only ever the
+sender's own problem, and is worth far more than an empty greeting.
+
+The panel prefills the box from `company.primaryContact` — **camelCase**.
+`mapContact()` converts responses, so reading `primary_contact` on the frontend
+silently yields undefined and the box is always blank.
+
+Typing a name does **not** write it back to the company record. If that is
+wanted later it is a small addition to the contacts PUT route.
+
+### Subscriber list mirror
+
+After a successful send the recipient is inserted into `email_subscribers`
+against the list named in `SERVICE_EMAIL_LIST`. The variable accepts a list
+**name** or an id — Studio's list screen does not put the id in the URL, so the
+name is the practical option. Unset means the feature is off and nothing is
+written.
+
+`UNIQUE(list_id, email)` makes a repeat send a no-op rather than a duplicate,
+and `email_lists.subscriber_count` is recalculated on any change so the sidebar
+figure stays honest. If the configured name matches more than one list the code
+refuses to guess and logs an error.
+
+Unsubscribes are mirrored: opting out of the introduction sets the subscriber
+row to `unsubscribed`. Leaving them showing as active is how someone later
+builds a campaign audience that quietly includes opted-out people.
+
+Worth stating plainly: this list is populated automatically from people who
+took a cold call and did not opt in. Sending them the introduction is one
+thing; using the list as a marketing audience later is a different question
+under PECR, and the automatic population makes it easy to forget how the
+addresses got there.
+
 ---
 
 ## Wiring — which files are live
