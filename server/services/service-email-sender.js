@@ -182,6 +182,7 @@ db.exec(`
     message_id          TEXT,
     error               TEXT,
     parent_id           TEXT,
+    referrer_name       TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -198,6 +199,20 @@ db.exec(`
     source          TEXT
   );
 `);
+
+// Migration for databases created before referrer_name existed. CREATE TABLE
+// IF NOT EXISTS does nothing to an existing table, so a new column has to be
+// added explicitly. Wrapped because ALTER throws if the column is already
+// there and there is no IF NOT EXISTS for columns in SQLite.
+try {
+  const cols = db.prepare(`PRAGMA table_info(service_email_sends)`).all();
+  if (!cols.some(c => c.name === 'referrer_name')) {
+    db.exec(`ALTER TABLE service_email_sends ADD COLUMN referrer_name TEXT`);
+    console.log('[service-email] added referrer_name column');
+  }
+} catch (err) {
+  console.error('[service-email] referrer_name migration failed:', err.message);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -411,6 +426,7 @@ export function queueServiceEmail({
   externalCompanyId,
   companyName,
   contactName,
+  referrerName,
   toEmail,
   services,
 }) {
@@ -434,14 +450,15 @@ export function queueServiceEmail({
 
   db.prepare(`
     INSERT INTO service_email_sends
-      (id, external_company_id, company_name, contact_name, to_email,
-       services_json, step, status, send_after)
-    VALUES (?, ?, ?, ?, ?, ?, 1, 'queued', ?)
+      (id, external_company_id, company_name, contact_name, referrer_name,
+       to_email, services_json, step, status, send_after)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'queued', ?)
   `).run(
     id,
     String(externalCompanyId),
     companyName || null,
     contactName || null,
+    (referrerName && String(referrerName).trim()) || null,
     email,
     JSON.stringify(fresh),
     sendAfter,
@@ -552,6 +569,7 @@ export async function processDue() {
         step: row.step,
         companyName: row.company_name,
         contactName: row.contact_name,
+        referrerName: row.referrer_name,
         senderName: SENDER_NAME,
         unsubUrl: unsubUrlFor(row.to_email),
       });

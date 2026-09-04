@@ -54,10 +54,24 @@ const FOLLOWUP_BODY    = ''; // TODO: follow-up body, same HTML shape as BODY
 const FONT = "font-family:Aptos,'Aptos Display',Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;";
 const P_STYLE = `margin:0 0 1em;${FONT}`;
 
-const BODY = `
+const OPENING_CALL = `
   <p style="${P_STYLE}">Hi [NAME], thanks for taking my call today. I appreciate you're busy and
   there's never really a good time for an unexpected IT call!</p>
+`;
 
+// Referral version. Used when the caller spoke to someone else who passed on
+// this address — the recipient has had no call, so "thanks for taking my call"
+// would simply confuse them.
+//
+// No pronouns for the referrer: the caller often will not know, and guessing
+// wrong in a first-contact email is worse than the slightly stiffer phrasing.
+const OPENING_REFERRAL = `
+  <p style="${P_STYLE}">Hi [NAME], I spoke to {{ReferrerName}} earlier who kindly passed on your
+  email address.</p>
+`;
+
+// Everything between the opening and the sign-off is identical either way.
+const BODY_MIDDLE = `
   <p style="${P_STYLE}">Just to give you a little background on us. We're a local IT company based
   in Essex and have been helping businesses across London and surrounding
   counties with their IT for over 25 years.</p>
@@ -82,7 +96,11 @@ const BODY = `
 
   <p style="${P_STYLE}">I've attached our brochure, which goes into a bit more detail on everything
   we do.</p>
+`;
 
+// "another call" and "Thanks again" only make sense to someone who has already
+// spoken to us — hence a separate closing for referrals.
+const CLOSING_CALL = `
   <p style="${P_STYLE}">There's absolutely no pressure from our side. I'd be happy to give you
   another call next week when hopefully the timing is a little better, or if you
   prefer, we can arrange a convenient time for me to pop over, introduce myself
@@ -94,6 +112,19 @@ const BODY = `
 
   <p style="${P_STYLE}">{{ThanksAgain}} and hopefully we'll speak soon.</p>
 `;
+
+const CLOSING_REFERRAL = `
+  <p style="${P_STYLE}">There's absolutely no pressure from our side. I'd be happy to give you a
+  call next week, or if you prefer, we can arrange a convenient time for me to
+  pop over, introduce myself and have an informal chat about your current IT
+  setup and where we may be able to help.</p>
+
+  <p style="${P_STYLE}">Feel free to reply to this email with a day or time that works for you, or
+  you can reach me on 01702 540776.</p>
+
+  <p style="${P_STYLE}">{{Thanks}} and hopefully we'll speak soon.</p>
+`;
+
 
 // Signature block. Hardcoded rather than driven by SERVICE_EMAIL_SENDER_NAME:
 // a job title, phone number and company name can't be derived from a first
@@ -196,18 +227,26 @@ function applyTokens(text, vars) {
   return String(text)
     .replace(/\[NAME\]/g, escapeHtml(vars.firstName))
     .replace(/\{\{ThanksAgain\}\}/g, escapeHtml(vars.thanksAgain))
+    .replace(/\{\{Thanks\}\}/g, escapeHtml(vars.thanks))
+    .replace(/\{\{ReferrerName\}\}/g, escapeHtml(vars.referrerName))
     .replace(/\{\{SenderName\}\}/g, escapeHtml(vars.senderName))
     .replace(/\{\{CompanyName\}\}/g, escapeHtml(vars.companyName));
 }
 
-function buildVars({ companyName, contactName, senderName }) {
+function buildVars({ companyName, contactName, referrerName, senderName }) {
   const name = firstNameOrNull(contactName);
+  const referrer = firstNameOrNull(referrerName);
   return {
     // "Hi there," is fine as a greeting. "Thanks again, there," is not — the
     // whole clause has to go, not just the word, so the sign-off is built here
     // rather than token-substituted into a fixed sentence.
     firstName: name || 'there',
     thanksAgain: name ? `Thanks again, ${name},` : 'Thanks again,',
+    // Referral version: no "again", because this is the first contact.
+    thanks: name ? `Thanks, ${name},` : 'Thanks,',
+    // Falls back to "someone at your company" so a referral email can never
+    // render "I spoke to  earlier" if the referrer somehow arrives empty.
+    referrerName: referrer || 'someone at your company',
     companyName: companyName || 'your business',
     senderName: senderName || 'Billy',
   };
@@ -249,14 +288,26 @@ export function renderServiceEmail({
   step = 1,
   companyName,
   contactName,
+  referrerName,
   senderName,
   unsubUrl,
 }) {
-  const vars = buildVars({ companyName, contactName, senderName });
+  const vars = buildVars({ companyName, contactName, referrerName, senderName });
+
+  // A referrer means the recipient has NOT spoken to us. Four separate phrases
+  // in the standard copy assume they have — "thanks for taking my call", "an
+  // unexpected IT call", "another call next week" and "Thanks again" — so this
+  // swaps the opening and the closing wholesale rather than patching one line.
+  const isReferral = Boolean(String(referrerName || '').trim());
 
   const body = (step === 2)
     ? applyTokens(FOLLOWUP_BODY, vars)
-    : applyTokens(BODY, vars);
+    : applyTokens(
+        (isReferral ? OPENING_REFERRAL : OPENING_CALL)
+        + BODY_MIDDLE
+        + (isReferral ? CLOSING_REFERRAL : CLOSING_CALL),
+        vars,
+      );
 
   const footer = `
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0 12px;">

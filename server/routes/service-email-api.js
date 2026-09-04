@@ -113,10 +113,10 @@ router.get('/catalogue', requireBridgeAuth, (req, res) => {
  * reasons is something the sender needs to see, not a failure to retry.
  */
 router.post('/send', requireBridgeAuth, (req, res) => {
-  const { externalCompanyId, companyName, contactName, toEmail, services } = req.body || {};
+  const { externalCompanyId, companyName, contactName, referrerName, toEmail, services } = req.body || {};
 
   const result = queueServiceEmail({
-    externalCompanyId, companyName, contactName, toEmail, services,
+    externalCompanyId, companyName, contactName, referrerName, toEmail, services,
   });
 
   if (!result.ok) {
