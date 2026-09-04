@@ -40,45 +40,59 @@ const FOLLOWUP_BODY    = ''; // TODO: follow-up body, same HTML shape as BODY
 // Copy
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Typography. Aptos is Office's default and is what Sweetbyte writes in, but it
+// ships with Office rather than being a web font — a Gmail user on a Mac or a
+// phone will not have it. The fallback chain degrades through Calibri (older
+// Office) and Segoe UI (Windows) to Arial, so the email stays close in feel
+// everywhere without ever falling back to Times New Roman.
+//
+// 11pt not 11px: Office sizes in points, and 11px would render noticeably
+// smaller than the "size 11" the copy was written at.
+//
+// Applied inline on every element rather than once on a wrapper, because
+// Outlook's Word renderer does not reliably inherit fonts into <p> and <li style="${FONT}">.
+const FONT = "font-family:Aptos,'Aptos Display',Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;";
+const P_STYLE = `margin:0 0 1em;${FONT}`;
+
 const BODY = `
-  <p style="margin:0 0 1em;">Hi [NAME], thanks for taking my call today. I appreciate you're busy and
+  <p style="${P_STYLE}">Hi [NAME], thanks for taking my call today. I appreciate you're busy and
   there's never really a good time for an unexpected IT call!</p>
 
-  <p style="margin:0 0 1em;">Just to give you a little background on us. We're a local IT company based
+  <p style="${P_STYLE}">Just to give you a little background on us. We're a local IT company based
   in Essex and have been helping businesses across London and surrounding
   counties with their IT for over 25 years.</p>
 
-  <p style="margin:0 0 1em;">We try to do things a little differently from other IT providers. We're
+  <p style="${P_STYLE}">We try to do things a little differently from other IT providers. We're
   friendly, approachable and flexible, and importantly, we don't believe in
   tying customers into lengthy contracts. Our aim is simply to become an
   extension of your business and be there when you need us.</p>
 
-  <p style="margin:0 0 1em;">We can help with everything from day-to-day IT support through to larger
+  <p style="${P_STYLE}">We can help with everything from day-to-day IT support through to larger
   projects, including:</p>
 
-  <ul style="margin:0 0 1em;padding-left:20px;">
-    <li>Flexible managed IT support</li>
-    <li>Microsoft 365, email and cloud backups</li>
-    <li>Cyber security and Cyber Essentials</li>
-    <li>Business internet, Wi-Fi and VoIP telephony</li>
-    <li>Websites and custom app development</li>
-    <li>Domain names and digital services</li>
-    <li>Business automation and bespoke software solutions</li>
+  <ul style="margin:0 0 1em;padding-left:20px;${FONT}">
+    <li style="${FONT}">Flexible managed IT support</li>
+    <li style="${FONT}">Microsoft 365, email and cloud backups</li>
+    <li style="${FONT}">Cyber security and Cyber Essentials</li>
+    <li style="${FONT}">Business internet, Wi-Fi and VoIP telephony</li>
+    <li style="${FONT}">Websites and custom app development</li>
+    <li style="${FONT}">Domain names and digital services</li>
+    <li style="${FONT}">Business automation and bespoke software solutions</li>
   </ul>
 
-  <p style="margin:0 0 1em;">I've attached our brochure, which goes into a bit more detail on everything
+  <p style="${P_STYLE}">I've attached our brochure, which goes into a bit more detail on everything
   we do.</p>
 
-  <p style="margin:0 0 1em;">There's absolutely no pressure from our side. I'd be happy to give you
+  <p style="${P_STYLE}">There's absolutely no pressure from our side. I'd be happy to give you
   another call next week when hopefully the timing is a little better, or if you
   prefer, we can arrange a convenient time for me to pop over, introduce myself
   and have an informal chat about your current IT setup and where we may be able
   to help.</p>
 
-  <p style="margin:0 0 1em;">Feel free to reply to this email with a day or time that works for you, or
+  <p style="${P_STYLE}">Feel free to reply to this email with a day or time that works for you, or
   you can reach me on 01702 540776.</p>
 
-  <p style="margin:0 0 1em;">{{ThanksAgain}} and hopefully we'll speak soon.</p>
+  <p style="${P_STYLE}">{{ThanksAgain}} and hopefully we'll speak soon.</p>
 `;
 
 // Signature block. Hardcoded rather than driven by SERVICE_EMAIL_SENDER_NAME:
@@ -89,7 +103,7 @@ const BODY = `
 // Inline styles only — Gmail and Outlook both strip <style> blocks from the
 // head, so anything relying on a class silently loses its formatting.
 const SIGNATURE = `
-  <p style="margin:16px 0 0;">
+  <p style="margin:16px 0 0;${FONT}">
     <strong>Billy Crockett</strong>&nbsp; |&nbsp; Business Development Consultant<br>
     Sweetbyte Ltd<br>
     01702 540776<br>
