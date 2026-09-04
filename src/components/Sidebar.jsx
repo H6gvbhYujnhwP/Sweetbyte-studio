@@ -100,6 +100,7 @@ export default function Sidebar({ onLogout, activeView, onNavigate, user }) {
           {can('customers')     && <SubItem id="email-customers"     label="Customers"     active={activeView==='email-customers'}     onNavigate={onNavigate} icon={<CustomersIcon />} />}
           {can('domain_health') && <SubItem id="email-domain-health" label="Domain Health" active={activeView==='email-domain-health'} onNavigate={onNavigate} icon={<DomainIcon />} />}
           {can('mailboxes')     && <SubItem id="email-mailboxes"     label="Mailboxes"     active={activeView==='email-mailboxes'}     onNavigate={onNavigate} icon={<MailboxIcon />} badge={prospectCount} />}
+          {can('customers')     && <SubItem id="email-service-log"   label="Service Emails" active={activeView==='email-service-log'}   onNavigate={onNavigate} icon={<MailboxIcon />} />}
         </>}
 
         {showPortal && <>
