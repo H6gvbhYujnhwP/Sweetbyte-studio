@@ -158,23 +158,24 @@ function escapeHtml(s) {
 // name, so callers can choose their own fallback — the subject drops the name
 // entirely, the body says "there".
 //
-// Capitalisation is fixed up here because it is typed in a hurry between calls:
-// "tony" becomes "Tony". An all-caps entry is downcased first, so "TONY" also
-// becomes "Tony" rather than shouting at the recipient. Anything already mixed
-// case is left alone, which is what protects "McDonald" and "O'Brien" from
-// being mangled into "Mcdonald" and "O'brien".
+// Capitalisation is always normalised, because it is typed in a hurry between
+// calls and comes in every shape: "tony", "TONY", "tOnY" and "TOnY" all become
+// "Tony". Hyphens and apostrophes are respected, so "jo-anne" → "Jo-Anne" and
+// "o'brien" → "O'Brien".
+//
+// The known trade-off: "McDonald" becomes "Mcdonald". Preserving that would
+// mean trusting whatever case was typed, which is exactly what produced "TOnY"
+// in a live subject line. Consistency was judged the better bet — a Mc name is
+// far rarer than a hurried typo.
 function firstNameOrNull(contactName) {
   const n = String(contactName || '').trim();
   if (!n) return null;
   const first = n.split(/\s+/)[0];
   if (!first) return null;
 
-  // Only flatten case when it is ALL caps — mixed case is assumed deliberate.
-  const base = (first === first.toUpperCase()) ? first.toLowerCase() : first;
-
-  // Capitalise the start, and after a hyphen or apostrophe, so "jo-anne" and
-  // "o'brien" come out as "Jo-Anne" and "O'Brien".
-  return base.replace(/(^|[-'’])(\p{L})/gu, (_, sep, ch) => sep + ch.toUpperCase());
+  return first
+    .toLowerCase()
+    .replace(/(^|[-'’])(\p{L})/gu, (_, sep, ch) => sep + ch.toUpperCase());
 }
 
 function applyTokens(text, vars) {
