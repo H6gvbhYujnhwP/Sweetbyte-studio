@@ -149,7 +149,7 @@ try {
 
 // The undo window. Long enough to catch a misclick, short enough that you've
 // moved to the next record before it matters.
-const UNDO_SECONDS = Number(process.env.SERVICE_EMAIL_UNDO_SECONDS || 10);
+const UNDO_SECONDS = Number(process.env.SERVICE_EMAIL_UNDO_SECONDS || 5);
 
 // Gap between the initial email and its follow-up.
 const FOLLOWUP_DAYS = Number(process.env.SERVICE_EMAIL_FOLLOWUP_DAYS || 7);
@@ -373,7 +373,7 @@ export function sentServiceKeys(externalCompanyId, email) {
  */
 export function historyForCompany(externalCompanyId) {
   const rows = db.prepare(`
-    SELECT id, to_email, services_json, step, status, send_after, sent_at, created_at
+    SELECT id, to_email, services_json, step, status, error, send_after, sent_at, created_at
       FROM service_email_sends
      WHERE external_company_id = ?
      ORDER BY created_at DESC
@@ -386,6 +386,9 @@ export function historyForCompany(externalCompanyId) {
     services: parseServices(r),
     step: r.step,
     status: r.status,
+    // Surfaced so the WorkTrackr panel can say WHY a send failed rather than
+    // just that it did. Without this the caller sees a red line and no clue.
+    error: r.error || null,
     sendAfter: r.send_after,
     sentAt: r.sent_at,
     createdAt: r.created_at,
