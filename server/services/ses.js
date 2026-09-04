@@ -113,7 +113,12 @@ function extractMessageId(xml) {
 //   References: <chain of message-ids in the thread>
 // Both are optional — undefined means a fresh standalone email (existing
 // behaviour). Most call sites don't need them; only the portal reply route does.
-function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, htmlBody, plainBody, listUnsubUrl, inReplyTo, references }) {
+// attachments — optional array of { filename, contentType, content } where
+// content is a Buffer. When absent or empty the message structure is byte-for-byte
+// what it always was (multipart/alternative at the top level), so campaign and
+// portal sends are completely unaffected. When present, the message becomes
+// multipart/mixed wrapping the existing multipart/alternative, per RFC 2046.
+function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, htmlBody, plainBody, listUnsubUrl, inReplyTo, references, attachments = [] }) {
   const boundary   = `b_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const toAddress  = toName ? `${toName} <${to}>` : to;
   const plain      = plainBody || htmlToPlain(htmlBody);
@@ -189,7 +194,17 @@ function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, 
     if (chain) headers.push(`References: ${chain}`);
   }
 
-  headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  const files = (Array.isArray(attachments) ? attachments : []).filter(
+    a => a && a.filename && a.content && a.content.length,
+  );
+  const hasFiles = files.length > 0;
+  const mixedBoundary = `m_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  headers.push(
+    hasFiles
+      ? `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`
+      : `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  );
 
   // Encode bodies as base64 with hard line wraps at 76 chars (RFC 2045).
   // Previously declared quoted-printable but didn't actually QP-encode, which
@@ -199,9 +214,9 @@ function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, 
   const htmlB64  = Buffer.from(wrappedHtml, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
   const plainB64 = Buffer.from(plain,       'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
 
-  return [
-    ...headers,
-    ``,
+  // The alternative part is identical in both cases — it just sits one level
+  // deeper when there are attachments.
+  const alternative = [
     `--${boundary}`,
     `Content-Type: text/plain; charset=UTF-8`,
     `Content-Transfer-Encoding: base64`,
@@ -215,6 +230,47 @@ function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, 
     htmlB64,
     ``,
     `--${boundary}--`,
+  ];
+
+  if (!hasFiles) {
+    return [...headers, ``, ...alternative].join('\r\n');
+  }
+
+  const fileParts = files.flatMap((f) => {
+    // RFC 2045 caps encoded lines at 76 chars. A 4MB PDF is ~5.6MB encoded, so
+    // this wrap matters: unwrapped base64 is rejected outright by some relays.
+    const b64 = f.content.toString('base64').replace(/(.{76})/g, '$1\r\n');
+    // Filenames: a plain ASCII name goes out as-is, which is what every client
+    // handles correctly. RFC 2047 ("=?UTF-8?B?...?=") is NOT valid in a filename
+    // parameter — clients that follow the spec display the encoded string
+    // verbatim as the attachment name. Non-ASCII uses RFC 2231 instead, which
+    // is the mechanism actually defined for parameter values.
+    const name = String(f.filename);
+    const asciiSafe = /^[\x20-\x7E]*$/.test(name) && !/["\\]/.test(name);
+    const nameParam = asciiSafe
+      ? `filename="${name}"`
+      : `filename*=UTF-8''${encodeURIComponent(name)}`;
+    return [
+      `--${mixedBoundary}`,
+      `Content-Type: ${f.contentType || 'application/octet-stream'}`,
+      `Content-Disposition: attachment; ${nameParam}`,
+      `Content-Transfer-Encoding: base64`,
+      ``,
+      b64,
+      ``,
+    ];
+  });
+
+  return [
+    ...headers,
+    ``,
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ``,
+    ...alternative,
+    ``,
+    ...fileParts,
+    `--${mixedBoundary}--`,
   ].join('\r\n');
 }
 
@@ -232,7 +288,7 @@ export async function sendEmail({
   to, toName, cc = null, fromName, fromEmail, replyTo, subject, htmlBody, plainBody,
   campaignId, subscriberId, baseUrl,
   track_opens = false, track_clicks = false, track_unsub = false,
-  inReplyTo = null, references = null,
+  inReplyTo = null, references = null, attachments = [],
 }) {
   let finalHtml = htmlBody;
   let listUnsubUrl = null;
@@ -253,7 +309,7 @@ export async function sendEmail({
   const raw = buildRawEmail({
     to, toName, cc, fromName, fromEmail, replyTo, subject,
     htmlBody: finalHtml, plainBody, listUnsubUrl,
-    inReplyTo, references,
+    inReplyTo, references, attachments,
   });
 
   const xml = await sesRequest({

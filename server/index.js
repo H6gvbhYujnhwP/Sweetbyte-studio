@@ -10,7 +10,7 @@ import algorithmRoutes from './routes/algorithm.js';
 import portalAuthRoutes from './routes/portal-auth.js';
 import portalAdminRoutes from './routes/portal-admin.js';
 import portalRoutes from './routes/portal.js';
-import serviceEmailRoutes from './routes/service-emails.js';
+import serviceEmailRoutes from './routes/service-email-api.js';
 import idyqBridgeRoutes from './routes/idyq-bridge.js';
 import hotProspectsRoutes from './routes/hot-prospects.js';
 import adminUsersRoutes from './routes/admin-users.js';
@@ -26,6 +26,7 @@ import { metaConfigured, testConnection, META } from './services/meta-api.js';
 import { startPoller } from './services/imap-poller.js';
 import { startClassifier } from './services/classify-replies.js';
 import { startDripTicker } from './services/drip-ticker.js';
+import { startServiceEmailTicker } from './services/service-email-ticker.js';
 import { selfTest as cryptoSelfTest } from './services/crypto-vault.js';
 import { backfillLogos } from './services/logo-backfill.js';
 
@@ -71,7 +72,11 @@ app.use('/api/algorithm',   algorithmRoutes);
 app.use('/api/portal',      portalAuthRoutes);   // customer-portal auth (login/logout/check/reset)
 app.use('/api/portal',      portalRoutes);       // customer-portal data (posts, inbox, campaigns)
 app.use('/api/portal-admin', portalAdminRoutes); // admin-side portal management (requireAuth)
-app.use('/api/service-emails', serviceEmailRoutes); // WorkTrackr bridge: HMAC-signed server-to-server, NOT behind admin login
+// WorkTrackr bridge: HMAC-signed server-to-server, NOT behind admin login.
+// Served by routes/service-email-api.js — the real Phase 1 implementation.
+// The earlier scaffold routes/service-emails.js has been deleted: it answered
+// /catalogue from a placeholder table and 501'd send/cancel/status.
+app.use('/api/service-emails', serviceEmailRoutes);
 app.use('/api/idyq-bridge', idyqBridgeRoutes);   // App integration: mints bridge tickets for the IDYQ admin embed (requireAuth)
 
 const distPath = join(__dirname, '../dist');
@@ -90,6 +95,8 @@ app.listen(PORT, () => {
   console.log(`[env] SES_CONFIGURATION_SET: ${process.env.SES_CONFIGURATION_SET || 'NOT SET (account default config set will apply)'}`);
   console.log(`[env] IDYQ_BRIDGE_SECRET:    ${process.env.IDYQ_BRIDGE_SECRET                            ? 'SET ✓' : 'MISSING ✗ (IDYQ admin embed will not work)'}`);
   console.log(`[env] IDYQ_BASE_URL:         ${process.env.IDYQ_BASE_URL || 'https://idoyourquotes.com (default)'}`);
+  console.log(`[env] WORKTRACKR_SERVICE_EMAIL_SECRET: ${process.env.WORKTRACKR_SERVICE_EMAIL_SECRET ? 'SET ✓' : 'MISSING ✗ (WorkTrackr service emails will 500)'}`);
+  console.log(`[env] PUBLIC_URL:           ${process.env.PUBLIC_URL || 'NOT SET (unsubscribe links will use the onrender.com host)'}`);
   console.log(`[env] META_ACCESS_TOKEN:     ${process.env.META_ACCESS_TOKEN ? 'SET ✓' : 'MISSING ✗ (Facebook Ads disabled)'}`);
   console.log(`[env] META_APP_SECRET:       ${process.env.META_APP_SECRET   ? 'SET ✓' : 'MISSING ✗ (calls unsigned)'}`);
   console.log(`[env] META_APP_ID:           ${process.env.META_APP_ID       ? 'SET ✓' : 'MISSING ✗'}`);
@@ -111,6 +118,12 @@ app.listen(PORT, () => {
   // Start the drip ticker — sends scheduled campaigns batch by batch in their
   // chosen window. Doesn't depend on encryption or Anthropic; just SES + DB.
   startDripTicker();
+
+  // Start the service-email ticker — closes the 10-second undo window on queued
+  // sends whose in-process timeout was lost to a restart, and fires follow-ups
+  // as they come due. Without this, queued rows sit forever and no follow-up
+  // ever goes. Needs SES + DB only, same as the drip ticker.
+  startServiceEmailTicker();
 
   // Backfill any logos uploaded before the trim-at-upload pipeline shipped.
   // Fire-and-forget — runs in the background, logs progress, doesn't block

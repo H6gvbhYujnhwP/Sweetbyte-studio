@@ -45,6 +45,94 @@ relationship, different secret.
 
 ---
 
+## What gets sent
+
+**One email, one service.** As of Sep 2026 this sends a single introduction
+email — there is no topic selection. The twelve-service catalogue and all the
+multi-service combining logic were removed from
+`server/services/service-email-templates.js`; recover them from git history if a
+second service is ever wanted.
+
+| | |
+|---|---|
+| Service key | `sweetbyte_intro` (permanent — it is the dedup key) |
+| Button label | About Sweetbyte |
+| Subject, named contact | `Dave - Sweetbyte Introduction` |
+| Subject, no contact name | `Sweetbyte Introduction` |
+| Attachment | `server/assets/Sweetbyte-Brochure.pdf`, ~4.2MB |
+| Follow-up | **Not written.** `FOLLOWUP_READY = false` |
+
+The subject deliberately drops the name rather than falling back to "there" —
+"there - Sweetbyte Introduction" in an inbox looks broken. The body still uses
+"Hi there," when no name is known.
+
+### The brochure attachment
+
+Read once at module load in `service-email-sender.js`, not per send: it never
+changes between deploys and re-reading 4.2MB per email would be wasteful. A
+missing file is logged loudly but is **not** fatal — sending the introduction
+without the brochure beats failing the send.
+
+`buildRawEmail()` in `ses.js` takes an optional `attachments` array. With none
+passed the message is byte-identical to what it always was (verified by
+differential test), so campaign and portal sends are untouched. With
+attachments the structure becomes:
+
+```
+multipart/mixed
+├── multipart/alternative
+│   ├── text/plain
+│   └── text/html
+└── application/pdf
+```
+
+Size: the finished message is ~5.8MB, ~7.7MB once base64'd for the SES API
+call. SES caps messages at 10MB, so there is headroom but not a lot — **do not
+add a second attachment** without re-checking. Note also that a ~5MB attachment
+on cold outbound is a real deliverability risk; watch the bounce and complaint
+rates after the first batch, and if they climb, host the PDF and link it
+instead.
+
+Attachment filenames go out as plain ASCII. RFC 2047 (`=?UTF-8?B?...?=`) is not
+valid in a `filename` parameter and spec-following clients display the encoded
+string as the attachment name — an early version of this code had that bug.
+
+### Follow-ups
+
+`FOLLOWUP_READY` in the templates file gates scheduling entirely: while it is
+false, `processDue()` never writes a step-2 row, so an empty follow-up cannot
+reach anyone. Flip it to true in the same commit that fills in
+`FOLLOWUP_SUBJECT` and `FOLLOWUP_BODY` — not before. Whether the brochure
+should ride along on the follow-up is undecided; it currently would not, since
+only step 1 attaches.
+
+---
+
+## Wiring — which files are live
+
+| Concern | File | Mounted / started in |
+|---|---|---|
+| Bridge routes | `server/routes/service-email-api.js` | `server/index.js` at `/api/service-emails` |
+| Send + follow-up logic, schema | `server/services/service-email-sender.js` | imported by the router |
+| Copy, service list | `server/services/service-email-templates.js` | imported by the router |
+| Sweeper | `server/services/service-email-ticker.js` | `startServiceEmailTicker()` in `index.js` |
+
+**History, so this doesn't recur.** An early scaffold, `server/routes/service-emails.js`,
+was mounted instead of the real router for the first two deploys. It answered
+`/catalogue` from a `service_catalogue` SQLite table seeded with twelve
+placeholders ("Service 1 — rename me" …) and returned 501 from `/send`,
+`/cancel`, `/status` and `/cancel-followups`. WorkTrackr rendered the
+placeholders faithfully and Send did nothing. The scaffold has been **deleted**.
+If chips ever read "rename me" again, check the import on `index.js` line 13
+before looking anywhere else.
+
+The `service_catalogue` table and its seed block in `server/db.js` (§30) are now
+**dead** — the catalogue is served from `service-email-templates.js`, which is
+the single source of truth. The table is left in place rather than dropped: it
+holds no referenced data, and removing it means reissuing db.js. Ignore it.
+
+---
+
 ## API — Studio exposes, WorkTrackr calls
 
 Base: `https://<studio-host>/api/service-emails`
@@ -220,19 +308,25 @@ at-import pattern, smaller blast radius. Fold them in if this feature grows.
 
 ---
 
-## Phase 2 — WorkTrackr (not built)
+## Phase 2 — WorkTrackr (built and deployed)
 
 1. `service_email_sends` mirror table in Postgres for chip state without a
    round-trip.
 2. `web/routes/service-emails.js` — signs and proxies to Studio; writes a
    `contact_notes` row with `kind='email'` so the send lands on the company
-   timeline.
-3. Panel in `CompanyProfile.jsx`, Overview column: address input prefilled from
-   `contacts.email`, chip grid from `/catalogue`, one Send button, toast with a
-   10-second Undo. Chips for services already sent to that address render ticked
-   and disabled.
+   timeline. Signer is `web/services/serviceEmailBridge.js`.
+3. Panel in `CompanyProfile.jsx`, Overview column
+   (`web/client/src/app/src/components/ServiceEmailPanel.jsx`): address input
+   prefilled from `contacts.email`, chip grid from `/catalogue`, one Send
+   button, toast with a 10-second Undo. Chips for services already sent to that
+   address render ticked and disabled.
 4. Hook the contacts PUT route: on stage change to `dead` or `customer`, call
    `/cancel-followups`.
+
+The WorkTrackr side needs no change to work against the real router. Both sign
+`"<expiry>.<nonce>.<METHOD>.<PATH>"` into `X-WT-Signature`; `requireBridgeAuth`
+in `service-email-api.js` verifies exactly that, so swapping the mount is a
+Studio-only deploy.
 
 **Sub-component rule applies** — every piece of the panel must be defined at
 module level, never inside `CompanyProfile`'s function body, or the address

@@ -31,12 +31,16 @@
 
 import crypto from 'crypto';
 import { v4 as uuid } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
 import {
   renderServiceEmail,
   buildSubject,
   normaliseServiceKeys,
+  FOLLOWUP_READY,
 } from './service-email-templates.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +60,38 @@ const FROM_NAME = process.env.SERVICE_EMAIL_FROM_NAME || 'Billy at Sweetbyte';
 // How the sign-off reads inside the body. Free of the ASCII constraint above,
 // since the body is base64-encoded UTF-8.
 const SENDER_NAME = process.env.SERVICE_EMAIL_SENDER_NAME || 'Billy';
+
+// ── Brochure attachment ──────────────────────────────────────────────────────
+// Read once at module load, not per send: it's ~4MB, and re-reading it for every
+// email would mean a disk hit and 4MB of garbage per message for a file that
+// never changes between deploys.
+//
+// Deliberately non-fatal if missing. A prospect getting the introduction without
+// the brochure is a much better outcome than the send failing outright, so a
+// missing file logs loudly and sends anyway.
+const BROCHURE_FILENAME = 'Sweetbyte-Brochure.pdf';
+const BROCHURE_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'assets',
+  BROCHURE_FILENAME,
+);
+
+let BROCHURE = null;
+try {
+  const buf = fs.readFileSync(BROCHURE_PATH);
+  BROCHURE = {
+    filename: BROCHURE_FILENAME,
+    contentType: 'application/pdf',
+    content: buf,
+  };
+  console.log(`[service-email] brochure loaded — ${(buf.length / 1024 / 1024).toFixed(2)}MB`);
+} catch (err) {
+  console.error(
+    `[service-email] BROCHURE MISSING at ${BROCHURE_PATH} — emails will send without it:`,
+    err.message,
+  );
+}
 
 // The undo window. Long enough to catch a misclick, short enough that you've
 // moved to the next record before it matters.
@@ -454,6 +490,7 @@ export async function processDue() {
           senderName: SENDER_NAME,
         }),
         htmlBody,
+        attachments: BROCHURE ? [BROCHURE] : [],
       });
 
       db.prepare(`
@@ -463,7 +500,7 @@ export async function processDue() {
       `).run(messageId || null, row.id);
       results.sent++;
 
-      if (row.step === 1) scheduleFollowup(row, services);
+      if (row.step === 1 && FOLLOWUP_READY) scheduleFollowup(row, services);
     } catch (err) {
       console.error('[service-email] send failed:', row.id, err.message);
       db.prepare(`
