@@ -41,19 +41,19 @@ const FOLLOWUP_BODY    = ''; // TODO: follow-up body, same HTML shape as BODY
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BODY = `
-  <p>Hi [NAME], thanks for taking my call today. I appreciate you're busy and
+  <p style="margin:0 0 1em;">Hi [NAME], thanks for taking my call today. I appreciate you're busy and
   there's never really a good time for an unexpected IT call!</p>
 
-  <p>Just to give you a little background on us. We're a local IT company based
+  <p style="margin:0 0 1em;">Just to give you a little background on us. We're a local IT company based
   in Essex and have been helping businesses across London and surrounding
   counties with their IT for over 25 years.</p>
 
-  <p>We try to do things a little differently from other IT providers. We're
+  <p style="margin:0 0 1em;">We try to do things a little differently from other IT providers. We're
   friendly, approachable and flexible, and importantly, we don't believe in
   tying customers into lengthy contracts. Our aim is simply to become an
   extension of your business and be there when you need us.</p>
 
-  <p>We can help with everything from day-to-day IT support through to larger
+  <p style="margin:0 0 1em;">We can help with everything from day-to-day IT support through to larger
   projects, including:</p>
 
   <ul style="margin:0 0 1em;padding-left:20px;">
@@ -66,19 +66,19 @@ const BODY = `
     <li>Business automation and bespoke software solutions</li>
   </ul>
 
-  <p>I've attached our brochure, which goes into a bit more detail on everything
+  <p style="margin:0 0 1em;">I've attached our brochure, which goes into a bit more detail on everything
   we do.</p>
 
-  <p>There's absolutely no pressure from our side. I'd be happy to give you
+  <p style="margin:0 0 1em;">There's absolutely no pressure from our side. I'd be happy to give you
   another call next week when hopefully the timing is a little better, or if you
   prefer, we can arrange a convenient time for me to pop over, introduce myself
   and have an informal chat about your current IT setup and where we may be able
   to help.</p>
 
-  <p>Feel free to reply to this email with a day or time that works for you, or
+  <p style="margin:0 0 1em;">Feel free to reply to this email with a day or time that works for you, or
   you can reach me on 01702 540776.</p>
 
-  <p>{{ThanksAgain}} and hopefully we'll speak soon.</p>
+  <p style="margin:0 0 1em;">{{ThanksAgain}} and hopefully we'll speak soon.</p>
 `;
 
 // Signature block. Hardcoded rather than driven by SERVICE_EMAIL_SENDER_NAME:
