@@ -106,6 +106,24 @@ reach anyone. Flip it to true in the same commit that fills in
 should ride along on the follow-up is undecided; it currently would not, since
 only step 1 attaches.
 
+Capitalisation is fixed up in `firstNameOrNull()` because the name is typed in a
+hurry between calls: "tony" → "Tony", and an ALL-CAPS entry is downcased first
+so "TONY" → "Tony" rather than shouting. Anything already mixed case is left
+alone, which is what stops "McDonald" becoming "Mcdonald". Hyphens and
+apostrophes are handled, so "jo-anne" → "Jo-Anne" and "o'brien" → "O'Brien".
+The known limitation: "mcdonald" typed all-lowercase comes out "Mcdonald", and
+there is no way to tell that from an ordinary name without a prefix dictionary.
+
+The sign-off is built as a whole clause, not a token in a fixed sentence:
+"Thanks again, Dave," with a name, "Thanks again," without. Substituting the
+"there" fallback into it produced "Thanks again, there," which reached a real
+inbox before it was caught.
+
+The signature block is **hardcoded** to Billy Crockett with his title and
+number. It is not driven by `SERVICE_EMAIL_SENDER_NAME`, because a job title
+and phone number cannot be derived from a first name. If Joe or Lewis ever send
+these, this block needs editing rather than an env var changing.
+
 ### The contact name
 
 Three sources, in order of preference:

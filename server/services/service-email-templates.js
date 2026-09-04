@@ -78,10 +78,24 @@ const BODY = `
   <p>Feel free to reply to this email with a day or time that works for you, or
   you can reach me on 01702 540776.</p>
 
-  <p>Thanks again, [NAME], and hopefully we'll speak soon.</p>
+  <p>{{ThanksAgain}} and hopefully we'll speak soon.</p>
 `;
 
-const SIGNATURE = `<p style="margin-top:16px;">{{SenderName}}</p>`;
+// Signature block. Hardcoded rather than driven by SERVICE_EMAIL_SENDER_NAME:
+// a job title, phone number and company name can't be derived from a first
+// name, so if someone other than Billy ever sends these, this block needs
+// editing rather than an env var flipping.
+//
+// Inline styles only — Gmail and Outlook both strip <style> blocks from the
+// head, so anything relying on a class silently loses its formatting.
+const SIGNATURE = `
+  <p style="margin:16px 0 0;">
+    <strong>Billy Crockett</strong>&nbsp; |&nbsp; Business Development Consultant<br>
+    Sweetbyte Ltd<br>
+    01702 540776<br>
+    <a href="https://www.sweetbyte.co.uk" style="color:#0b6bcb;">www.sweetbyte.co.uk</a>
+  </p>
+`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lookup / catalogue
@@ -143,22 +157,42 @@ function escapeHtml(s) {
 // First name only. "Dave Smith" → "Dave". Returns null when there is no usable
 // name, so callers can choose their own fallback — the subject drops the name
 // entirely, the body says "there".
+//
+// Capitalisation is fixed up here because it is typed in a hurry between calls:
+// "tony" becomes "Tony". An all-caps entry is downcased first, so "TONY" also
+// becomes "Tony" rather than shouting at the recipient. Anything already mixed
+// case is left alone, which is what protects "McDonald" and "O'Brien" from
+// being mangled into "Mcdonald" and "O'brien".
 function firstNameOrNull(contactName) {
   const n = String(contactName || '').trim();
   if (!n) return null;
-  return n.split(/\s+/)[0] || null;
+  const first = n.split(/\s+/)[0];
+  if (!first) return null;
+
+  // Only flatten case when it is ALL caps — mixed case is assumed deliberate.
+  const base = (first === first.toUpperCase()) ? first.toLowerCase() : first;
+
+  // Capitalise the start, and after a hyphen or apostrophe, so "jo-anne" and
+  // "o'brien" come out as "Jo-Anne" and "O'Brien".
+  return base.replace(/(^|[-'’])(\p{L})/gu, (_, sep, ch) => sep + ch.toUpperCase());
 }
 
 function applyTokens(text, vars) {
   return String(text)
     .replace(/\[NAME\]/g, escapeHtml(vars.firstName))
+    .replace(/\{\{ThanksAgain\}\}/g, escapeHtml(vars.thanksAgain))
     .replace(/\{\{SenderName\}\}/g, escapeHtml(vars.senderName))
     .replace(/\{\{CompanyName\}\}/g, escapeHtml(vars.companyName));
 }
 
 function buildVars({ companyName, contactName, senderName }) {
+  const name = firstNameOrNull(contactName);
   return {
-    firstName: firstNameOrNull(contactName) || 'there',
+    // "Hi there," is fine as a greeting. "Thanks again, there," is not — the
+    // whole clause has to go, not just the word, so the sign-off is built here
+    // rather than token-substituted into a fixed sentence.
+    firstName: name || 'there',
+    thanksAgain: name ? `Thanks again, ${name},` : 'Thanks again,',
     companyName: companyName || 'your business',
     senderName: senderName || 'Billy',
   };
