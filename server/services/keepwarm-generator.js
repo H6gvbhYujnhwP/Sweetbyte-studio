@@ -1,0 +1,249 @@
+/**
+ * server/services/keepwarm-generator.js — writes keep-warm email drafts.
+ *
+ * Mirrors the shape of the LinkedIn post generator in services/claude.js: ask
+ * for a batch, get structured JSON back, hand the operator a set to choose
+ * from. Emails rather than posts, and no images.
+ *
+ * SOURCE OF TRUTH
+ * server/assets/sweetbyte-company-rag.md, read once at module load. It carries
+ * its own guardrails in §9 — no statistic outside §3 or §7, no client name
+ * outside §8, no surname for anyone except Sweetman, UK spelling — and those
+ * are restated as hard rules in the prompt rather than left for the model to
+ * notice while reading. A generator that invents a plausible-sounding uptime
+ * figure is worse than one that produces nothing, because the invented figure
+ * goes out over Billy's name.
+ *
+ * WHAT COMES BACK
+ * Each draft is a complete email: one subject line and one body. The operator
+ * picks the ones worth keeping and bins the rest, so the batch is a set of
+ * genuine alternatives rather than a queue to work through — which is why the
+ * prompt insists each one open differently. Three variations on "Fed up with
+ * slow IT support?" is one draft with extra steps.
+ *
+ * NO IMAGES, NO ATTACHMENT, NO TRACKING PIXEL
+ * Deliberate, and each for its own reason. Images because a cold-ish B2B email
+ * that looks like a newsletter gets filed like one. The brochure because a 4MB
+ * attachment on repeat sends is a deliverability problem. The pixel is a Phase 2
+ * question and is not decided here.
+ *
+ * HTML SHAPE
+ * Plain, inline-styled, single column, no tables and no media queries. The font
+ * stack matches service-email-templates.js so the introduction email and the
+ * keep-warm emails that follow it look like they came from the same person —
+ * because they did.
+ *
+ * Env: ANTHROPIC_API_KEY (required).
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── The RAG ──────────────────────────────────────────────────────────────────
+// Read once at module load. It changes between deploys, never between calls,
+// and re-reading it per generation would be a disk hit for no benefit.
+//
+// A missing file IS fatal here, unlike the brochure in service-email-sender.js.
+// The difference matters: an introduction email without its attachment is still
+// a correct email, whereas generating marketing copy with no company knowledge
+// produces confident, fluent, wrong text over Billy's signature.
+const RAG_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'assets',
+  'sweetbyte-company-rag.md',
+);
+
+let RAG = null;
+try {
+  RAG = fs.readFileSync(RAG_PATH, 'utf8');
+  console.log(`[keepwarm] company RAG loaded (${Math.round(RAG.length / 1024)}KB)`);
+} catch (err) {
+  console.error(`[keepwarm] COMPANY RAG MISSING at ${RAG_PATH} — generation will refuse to run. ${err.message}`);
+}
+
+export function ragLoaded() { return !!RAG; }
+
+export const ALLOWED_COUNTS = [3, 6, 9];
+
+// ── Email shell ──────────────────────────────────────────────────────────────
+// Matches service-email-templates.js: Aptos first because that is what
+// Sweetbyte writes in, degrading through Calibri and Segoe UI to Arial so it
+// never lands on Times New Roman. Points not pixels, because Office sizes in
+// points and 11px renders noticeably smaller than the size 11 the copy was
+// written at. Applied inline on every element rather than once on a wrapper,
+// because Outlook's Word renderer does not reliably inherit fonts into <p>.
+const FONT = "font-family:Aptos,'Aptos Display',Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;";
+const P_STYLE = `margin:0 0 1em;${FONT}`;
+
+/**
+ * The signature block. Hardcoded to Billy rather than driven by an env var,
+ * for the same reason the introduction email's is: a job title and a phone
+ * number cannot be derived from a first name. These emails come from Billy's
+ * address, so they carry Billy's name. If Joe or Lewis ever send them, this
+ * block needs editing.
+ *
+ * No brochure attachment — the website, the address and the number are the
+ * whole footer, as agreed.
+ */
+export function signatureHtml() {
+  return `
+  <p style="${P_STYLE}">Thanks,<br>
+  <strong>Billy Crockett</strong><br>
+  Sweetbyte Ltd</p>
+  <p style="margin:0 0 1em;${FONT}color:#444;">
+    <a href="https://sweetbyte.co.uk" style="color:#1EA4C9;text-decoration:none;">sweetbyte.co.uk</a><br>
+    <a href="mailto:billy@sweetbyte.co.uk" style="color:#1EA4C9;text-decoration:none;">billy@sweetbyte.co.uk</a><br>
+    01702 540776
+  </p>`;
+}
+
+/**
+ * Assemble a finished email: the generated body, then the signature, then the
+ * opt-out line.
+ *
+ * ONE renderer, used by both the preview and (in the next phase) the send, so
+ * what the operator approves on screen is byte-for-byte what leaves the
+ * building. Two renderers is how an email gets approved in one wording and
+ * delivered in another.
+ *
+ * `unsubUrl` is optional only so the preview can render before an address is
+ * known. A send must always pass one — an unsubscribe link is not decoration
+ * on a repeat marketing email, it is the thing that makes sending it lawful.
+ */
+export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null }) {
+  const greeting = `<p style="${P_STYLE}">Hi ${firstName || 'there'},</p>`;
+
+  const optOut = unsubUrl
+    ? `<p style="margin:24px 0 0;${FONT}font-size:9pt;color:#888;">
+         Not useful? <a href="${unsubUrl}" style="color:#888;">Unsubscribe</a> and we will not email you again.<br>
+         Sweetbyte Ltd, Studio 6, Lower Barn Farm, London Road, Rayleigh, Essex, SS6 9ET. Company 09949224.
+       </p>`
+    : `<p style="margin:24px 0 0;${FONT}font-size:9pt;color:#888;">
+         Not useful? Unsubscribe and we will not email you again.<br>
+         Sweetbyte Ltd, Studio 6, Lower Barn Farm, London Road, Rayleigh, Essex, SS6 9ET. Company 09949224.
+       </p>`;
+
+  return `<div style="max-width:600px;${FONT}color:#222;">
+${greeting}
+${bodyHtml}
+${signatureHtml()}
+${optOut}
+</div>`;
+}
+
+// ── Prompt ───────────────────────────────────────────────────────────────────
+
+const SYSTEM_PROMPT = `You write keep-warm marketing emails for Sweetbyte Ltd, an Essex-based managed IT services provider.
+
+These go to small-business owners and office managers who took a cold call from Sweetbyte, were sent an introduction email, and have not said no. They are busy, not technical, and did not ask to hear from you again. Earn the read.
+
+The company knowledge base you are given is the ONLY permitted source of fact. Treat it as absolute.`;
+
+function buildUserPrompt(count, avoid) {
+  const avoidBlock = avoid.length
+    ? `\nALREADY USED — do not repeat these subjects, and do not rework these angles:\n${avoid.map(a => `- "${a.subject}"${a.angle ? ` (angle: ${a.angle})` : ''}`).join('\n')}\n`
+    : '';
+
+  return `COMPANY KNOWLEDGE BASE:
+${RAG}
+${avoidBlock}
+Write ${count} completely different keep-warm emails.
+
+HARD RULES — breaking any of these makes the email unusable:
+1. Do not state a statistic, price, percentage or time figure that is not in section 3 or section 7 of the knowledge base. If you want a number and cannot find one, write the sentence without a number.
+2. Do not name a client that is not in section 8.
+3. Do not give a surname for any team member except Sweetman.
+4. UK English throughout: specialises, optimisation, defence, modernise, organisation.
+5. Never write "SweetByte" or "Sweet Byte". It is "Sweetbyte", one word, capital S only.
+6. No em dashes. No exclamation marks. No emoji. No images.
+7. Do not claim the reader is an existing customer, do not reference a specific conversation, and do not invent anything about their business. You do not know what they do.
+8. Do not write a sign-off, a signature, a phone number or an unsubscribe line. Those are added afterwards. End on the last sentence of your final paragraph.
+
+SUBJECT LINES:
+Short, specific and human. Aim under 55 characters. It should read like a line from a person, not a campaign. The strongest openers in Sweetbyte's own material frame the reader's pain as a question, or set Sweetbyte against how other IT companies behave. Avoid words that trip spam filters and avoid anything that reads as a mass mailing.
+
+BODY:
+120 to 200 words. Short paragraphs, two or three sentences each. Plain English, first person plural, address the reader as "you", no jargon. Open on something the reader recognises about their own situation, make one point well, and close with a single low-pressure call to action — a reply, or a call on the number in the signature. One idea per email. Do not try to cover the whole service catalogue.
+
+VARIETY — this matters most:
+Each of the ${count} emails must take a genuinely different angle: a different service area, a different reader pain, a different opening move. If two of them could swap subject lines without anyone noticing, you have written the same email twice.
+
+HTML:
+Body must be plain HTML paragraphs only. Every paragraph exactly: <p style="${P_STYLE}">text</p>
+Use <strong> for emphasis, sparingly. No headings, no tables, no images, no inline links, no lists unless a list is genuinely the clearest form.
+
+Return ONLY valid JSON, no other text, no markdown fences:
+{
+  "emails": [
+    {
+      "angle": "four to six words naming the angle, e.g. 'backup failure pain'",
+      "subject": "the subject line",
+      "html": "<p style=\\"${P_STYLE}\\">First paragraph...</p><p style=\\"${P_STYLE}\\">Second...</p>",
+      "plain": "the same email as plain text, paragraphs separated by blank lines"
+    }
+  ]
+}
+
+Generate exactly ${count}.`;
+}
+
+// ── Generate ─────────────────────────────────────────────────────────────────
+
+/**
+ * Ask Claude for `count` drafts.
+ *
+ * Throws on anything that would produce silently wrong output — missing RAG,
+ * missing key, unparseable response, wrong number of emails back. The screen
+ * shows the thrown message verbatim, because "the model returned 2 emails
+ * instead of 6" is something the operator can act on and "generation failed"
+ * is not.
+ */
+export async function generateEmails(count, previous = []) {
+  if (!RAG) throw new Error('Company knowledge base is missing from the server — cannot generate.');
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on Studio.');
+  if (!ALLOWED_COUNTS.includes(count)) throw new Error(`Count must be one of ${ALLOWED_COUNTS.join(', ')}.`);
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 8000,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: buildUserPrompt(count, previous) }],
+  });
+
+  const text = (message.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('');
+
+  // The model is told not to use markdown fences, but a stray one should not
+  // cost the operator a whole generation run.
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Claude did not return JSON. First 200 characters: ' + text.slice(0, 200));
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (err) {
+    throw new Error('Claude returned malformed JSON: ' + err.message);
+  }
+
+  const emails = Array.isArray(parsed.emails) ? parsed.emails : [];
+  const clean = emails
+    .filter(e => e && typeof e.subject === 'string' && typeof e.html === 'string')
+    .map(e => ({
+      angle:   String(e.angle || '').trim().slice(0, 120) || null,
+      subject: String(e.subject).trim().slice(0, 200),
+      html:    String(e.html).trim(),
+      plain:   typeof e.plain === 'string' ? e.plain.trim() : null,
+    }))
+    .filter(e => e.subject && e.html);
+
+  if (clean.length === 0) throw new Error('Claude returned no usable emails.');
+
+  return clean;
+}

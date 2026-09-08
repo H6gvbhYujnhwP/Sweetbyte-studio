@@ -6,6 +6,7 @@ import ClientDetail from './ClientDetail.jsx';
 import EmailSection from './EmailSection.jsx';
 import PortalAdmin from './PortalAdmin.jsx';
 import ServiceEmailLog from './ServiceEmailLog.jsx';
+import KeepWarm from './KeepWarm.jsx';
 import IDYQAdmin from './apps/IDYQAdmin.jsx';
 import CrmHotProspects from './CrmHotProspects.jsx';
 import FacebookPixels from './FacebookPixels.jsx';
@@ -25,7 +26,7 @@ import { SB } from '../brand.js';
 // list falls back to 'clients'.
 const VALID_VIEWS = [
   'clients',
-  'email-customers', 'email-domain-health', 'email-mailboxes', 'email-service-log',
+  'email-customers', 'email-domain-health', 'email-mailboxes', 'email-service-log', 'keepwarm',
   'portal-customers',
   'crm-hot-prospects',
   'crm-companies',
@@ -63,7 +64,7 @@ const VIEW_SECTION = {
 };
 const VIEW_ORDER = [
   'clients', 'instagram', 'tiktok', 'facebook-pixels', 'facebook-ads',
-  'email-customers', 'email-domain-health', 'email-mailboxes', 'email-service-log',
+  'email-customers', 'email-domain-health', 'email-mailboxes', 'email-service-log', 'keepwarm',
   'portal-customers', 'crm-hot-prospects', 'crm-companies', 'crm-tasks', 'crm-deals', 'crm-orders', 'crm-approvals', 'crm-purchasing', 'apps-idyq',
 ];
 
@@ -219,6 +220,16 @@ export default function Dashboard({ onLogout, user }) {
       <div style={{ display:'flex', height:'100vh', background:'#f5f5f3' }}>
         <Sidebar onLogout={onLogout} activeView={view} onNavigate={handleNavigate} user={user} />
         <ServiceEmailLog />
+      </div>
+    );
+  }
+
+  // ── Keep-warm emails — audience, generation, review (no sending yet) ──────
+  if (view === 'keepwarm') {
+    return (
+      <div style={{ display:'flex', height:'100vh', background:'#f5f5f3' }}>
+        <Sidebar onLogout={onLogout} activeView={view} onNavigate={handleNavigate} user={user} />
+        <KeepWarm />
       </div>
     );
   }
