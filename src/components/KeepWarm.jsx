@@ -293,18 +293,18 @@ function ReadPanel({
             Body — edit the wording here, then save
           </div>
           <textarea
-            value={draft.html_body}
-            onChange={(e) => onChange({ html_body: e.target.value })}
-            rows={10}
+            value={state.bodyText}
+            onChange={(e) => onChange({ bodyText: e.target.value })}
+            rows={12}
             style={{
-              width: '100%', boxSizing: 'border-box', padding: '10px 12px', fontSize: 12,
-              border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
-              lineHeight: 1.6, resize: 'vertical',
+              width: '100%', boxSizing: 'border-box', padding: '12px 14px', fontSize: 14,
+              border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit',
+              lineHeight: 1.7, resize: 'vertical', color: TEXT,
             }}
           />
           <div style={{ fontSize: 12, color: TERTIARY, marginTop: 6, marginBottom: 10 }}>
-            Keep each paragraph wrapped in its {'<p style="…">'} tag — that styling is what makes it
-            render correctly in Outlook. Saving an edit clears the approval, so re-approve afterwards.
+            Leave a blank line between paragraphs. The fonts and sizing are handled for you.
+            Saving an edit clears the approval, so re-approve afterwards.
           </div>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
@@ -491,7 +491,7 @@ export default function KeepWarm() {
       setSubjectHistory([]);
       setBodyUndo(null);
       setRegenError(null);
-      setOpen({ draft: d.draft, preview: d.preview });
+      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
     } catch (err) {
       setError(err.message);
     }
@@ -506,7 +506,7 @@ export default function KeepWarm() {
     // the button was pressed, not whatever state has become by the time the
     // response lands.
     const priorSubject = open.draft.subject;
-    const priorBody    = open.draft.html_body;
+    const priorBody    = open.bodyText;
 
     try {
       const r = await fetch(`/api/keepwarm/drafts/${open.draft.id}/regenerate`, {
@@ -515,7 +515,7 @@ export default function KeepWarm() {
         body: JSON.stringify({
           part,
           subject: open.draft.subject,
-          html: open.draft.html_body,
+          text: open.bodyText,
           avoid: part === 'subject' ? subjectHistory : undefined,
         }),
       });
@@ -527,7 +527,7 @@ export default function KeepWarm() {
       } else {
         setBodyUndo(priorBody);
       }
-      setOpen({ draft: d.draft, preview: d.preview });
+      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
       await loadDrafts();
     } catch (err) {
       setRegenError(err.message);
@@ -548,11 +548,11 @@ export default function KeepWarm() {
       const r = await fetch(`/api/keepwarm/drafts/${open.draft.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: open.draft.subject, html: restore }),
+        body: JSON.stringify({ subject: open.draft.subject, text: restore }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not restore');
-      setOpen({ draft: d.draft, preview: d.preview });
+      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
       await loadDrafts();
     } catch (err) {
       setRegenError(err.message);
@@ -569,11 +569,11 @@ export default function KeepWarm() {
       const r = await fetch(`/api/keepwarm/drafts/${open.draft.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: open.draft.subject, html: open.draft.html_body }),
+        body: JSON.stringify({ subject: open.draft.subject, text: open.bodyText }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not save');
-      setOpen({ draft: d.draft, preview: d.preview });
+      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
       await loadDrafts();
     } catch (err) {
       setError(err.message);
@@ -774,7 +774,16 @@ export default function KeepWarm() {
         state={open}
         saving={saving}
         onClose={() => setOpen(null)}
-        onChange={(patch) => setOpen(o => ({ ...o, draft: { ...o.draft, ...patch } }))}
+        onChange={(patch) => setOpen(o => {
+          // bodyText is the editable plain-text form and lives beside the draft,
+          // not on it — the draft row holds the styled HTML the server built.
+          const { bodyText, ...onDraft } = patch;
+          return {
+            ...o,
+            ...(bodyText !== undefined ? { bodyText } : {}),
+            draft: { ...o.draft, ...onDraft },
+          };
+        })}
         onSave={saveOpen}
         onStatus={setStatus}
         onRegenerate={regenerate}

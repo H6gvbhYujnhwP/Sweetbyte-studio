@@ -136,6 +136,66 @@ ${optOut}
 </div>`;
 }
 
+// ── Plain text in, styled HTML out ───────────────────────────────────────────
+//
+// The operator edits plain paragraphs and never sees a tag. The inline styling
+// is not a choice anybody makes per email — it exists so Outlook's Word
+// renderer does not fall back to Times New Roman — so putting it in front of
+// somebody rewording a sentence is showing them plumbing they cannot usefully
+// change and can easily break.
+//
+// This conversion lives here, on the server, next to P_STYLE. Doing it in the
+// browser would mean a second copy of the style string, and two copies of a
+// constant drift the moment one of them is edited.
+//
+// The round trip is lossless because the generated body is only ever plain
+// paragraphs — the prompts forbid headings, tables, links and inline emphasis
+// precisely so that stripping to text and rebuilding loses nothing. If a future
+// prompt ever reintroduces inline markup, this pair stops being safe and the
+// editor has to change with it.
+
+/**
+ * Styled paragraphs → plain text, blank line between paragraphs.
+ */
+export function htmlToText(html) {
+  return String(html || '')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .split(/<\s*\/\s*p\s*>/i)
+    .map(chunk => chunk.replace(/<[^>]*>/g, ''))
+    .map(chunk => chunk
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#0?39;/gi, "'"))
+    .map(chunk => chunk.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/**
+ * Plain text → styled paragraphs.
+ *
+ * Escaping first is not optional. An ampersand or an angle bracket typed into
+ * the box would otherwise be written into the message as markup, and the reader
+ * would get a mangled sentence or a swallowed one.
+ */
+export function textToHtml(text) {
+  const escape = (t) => String(t)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n\s*\n/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => `<p style="${P_STYLE}">${escape(p).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You write keep-warm marketing emails for Sweetbyte Ltd, an Essex-based managed IT services provider.
@@ -175,7 +235,7 @@ Each of the ${count} emails must take a genuinely different angle: a different s
 
 HTML:
 Body must be plain HTML paragraphs only. Every paragraph exactly: <p style="${P_STYLE}">text</p>
-Use <strong> for emphasis, sparingly. No headings, no tables, no images, no inline links, no lists unless a list is genuinely the clearest form.
+No bold, no <strong>, no headings, no tables, no images, no inline links, no lists. Paragraphs only — the operator edits these as plain text, so any inline markup would be lost the first time they reword a sentence.
 
 Return ONLY valid JSON, no other text, no markdown fences:
 {
@@ -304,7 +364,7 @@ HARD RULES:
 
 LENGTH AND SHAPE: 120 to 200 words. Short paragraphs of two or three sentences. Plain English, first person plural, address the reader as "you". Open on something the reader recognises about their own situation, make one point well, close with a single low-pressure call to action.
 
-HTML: plain paragraphs only, each exactly <p style="${P_STYLE}">text</p>. No headings, no tables, no images, no inline links.
+HTML: plain paragraphs only, each exactly <p style="${P_STYLE}">text</p>. No bold, no <strong>, no headings, no tables, no images, no inline links.
 
 Return ONLY valid JSON, no markdown fences:
 {"html":"<p style=\\"${P_STYLE}\\">...</p>","plain":"the same email as plain text"}`,

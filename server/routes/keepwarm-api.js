@@ -39,6 +39,8 @@ import {
   generateSubject,
   generateBody,
   renderEmailHtml,
+  htmlToText,
+  textToHtml,
   ragLoaded,
   ALLOWED_COUNTS,
 } from '../services/keepwarm-generator.js';
@@ -222,6 +224,9 @@ router.get('/drafts/:id', (req, res) => {
 
     res.json({
       draft: row,
+      // The editable form of the body. The operator works in plain paragraphs;
+      // the inline styling is put back on save, so no tag ever reaches the screen.
+      bodyText: htmlToText(row.html_body),
       preview: renderEmailHtml({ bodyHtml: row.html_body, firstName: null }),
     });
   } catch (err) {
@@ -232,17 +237,27 @@ router.get('/drafts/:id', (req, res) => {
 
 router.put('/drafts/:id', (req, res) => {
   try {
-    const { subject, html } = req.body || {};
-    if (subject === undefined && html === undefined) {
+    // `text` is what the screen sends: plain paragraphs. `html` is still
+    // accepted so nothing that already speaks the old shape breaks, but the
+    // browser no longer uses it.
+    const { subject, text, html } = req.body || {};
+    if (subject === undefined && text === undefined && html === undefined) {
       return res.status(400).json({ error: 'nothing to update' });
     }
     if (subject !== undefined && !String(subject).trim()) {
       return res.status(400).json({ error: 'subject cannot be empty' });
     }
+    if (text !== undefined && !String(text).trim()) {
+      return res.status(400).json({ error: 'the email cannot be empty' });
+    }
+
+    const nextHtml = text !== undefined ? textToHtml(text)
+                   : html !== undefined ? String(html)
+                   : null;
 
     const result = updateDraft(req.params.id, {
       subject: subject === undefined ? null : String(subject).trim().slice(0, 200),
-      html:    html === undefined ? null : String(html),
+      html:    nextHtml,
     });
 
     if (!result) return res.status(404).json({ error: 'not_found' });
@@ -250,6 +265,7 @@ router.put('/drafts/:id', (req, res) => {
 
     res.json({
       draft: result,
+      bodyText: htmlToText(result.html_body),
       preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
     });
   } catch (err) {
@@ -275,7 +291,7 @@ router.put('/drafts/:id', (req, res) => {
  * reason editing does: the tick referred to wording that no longer exists.
  */
 router.post('/drafts/:id/regenerate', async (req, res) => {
-  const { part, subject, html, avoid } = req.body || {};
+  const { part, subject, text, html, avoid } = req.body || {};
   if (part !== 'subject' && part !== 'body') {
     return res.status(400).json({ error: "part must be 'subject' or 'body'" });
   }
@@ -285,7 +301,9 @@ router.post('/drafts/:id/regenerate', async (req, res) => {
   if (row.status === 'sent') return res.status(409).json({ error: 'already_sent' });
 
   const currentSubject = (subject !== undefined && subject !== null) ? String(subject) : row.subject;
-  const currentHtml    = (html    !== undefined && html    !== null) ? String(html)    : row.html_body;
+  const currentHtml    = (text !== undefined && text !== null) ? textToHtml(text)
+                       : (html !== undefined && html !== null) ? String(html)
+                       : row.html_body;
 
   try {
     let result;
@@ -312,6 +330,7 @@ router.post('/drafts/:id/regenerate', async (req, res) => {
 
     res.json({
       draft: result,
+      bodyText: htmlToText(result.html_body),
       preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
     });
   } catch (err) {
