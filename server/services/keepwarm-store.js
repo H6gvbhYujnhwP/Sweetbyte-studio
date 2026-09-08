@@ -111,6 +111,26 @@ db.exec(`
  */
 export const ALL_STAGES = ['new', 'contacted', 'voicemail', 'prospect', 'hot_prospect', 'customer', 'dead'];
 
+/**
+ * Stages that can NEVER be put into the loop, whatever the settings say.
+ *
+ * `customer` is locked at the operator's instruction. Keep-warm copy is written
+ * to win new business — "are you still on a long contract", "when did you last
+ * test a restore". Sending that to somebody who has already bought is the worst
+ * mistake this screen can make and it would not announce itself; it would come
+ * back as a confused reply days later.
+ *
+ * This is enforced HERE rather than only by greying out the chip, because the
+ * chip is one HTTP request away from being bypassed and the settings row
+ * outlives any particular version of the screen. Anything already stored is
+ * stripped on read as well as on write, so a value saved before this rule
+ * existed cannot come back to life.
+ *
+ * If keep-warm-style emails to existing customers are ever wanted, that is a
+ * separate audience with separate copy, not this list with one more tick.
+ */
+export const LOCKED_STAGES = ['customer'];
+
 export const STAGE_LABELS = {
   new:          'New',
   contacted:    'Contacted',
@@ -144,9 +164,10 @@ function writeSetting(key, value) {
 
 export function getSettings() {
   const stored = readSetting('stages');
-  const stages = Array.isArray(stored)
+  const stages = (Array.isArray(stored)
     ? stored.filter(s => ALL_STAGES.includes(s))
-    : DEFAULTS.stages;
+    : DEFAULTS.stages
+  ).filter(s => !LOCKED_STAGES.includes(s));
 
   const includeNoStage = readSetting('includeNoStage');
 
@@ -165,7 +186,10 @@ export function getSettings() {
  */
 export function saveSettings({ stages, includeNoStage }) {
   if (Array.isArray(stages)) {
-    writeSetting('stages', stages.filter(s => ALL_STAGES.includes(s)));
+    writeSetting(
+      'stages',
+      stages.filter(s => ALL_STAGES.includes(s) && !LOCKED_STAGES.includes(s)),
+    );
   }
   if (typeof includeNoStage === 'boolean') {
     writeSetting('includeNoStage', includeNoStage);

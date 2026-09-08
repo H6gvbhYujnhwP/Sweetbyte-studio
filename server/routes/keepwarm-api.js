@@ -19,6 +19,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import {
   ALL_STAGES,
+  LOCKED_STAGES,
   STAGE_LABELS,
   getSettings,
   saveSettings,
@@ -66,6 +67,10 @@ router.get('/overview', (req, res) => {
         label: STAGE_LABELS[key],
         count: counts[key] || 0,
         selected: settings.stages.includes(key),
+        // Locked stages are shown so the operator can see the number, but the
+        // screen renders them as a label rather than a control. The store
+        // enforces this independently — the flag is presentation only.
+        locked: LOCKED_STAGES.includes(key),
       })),
       noStageCount: counts.__none || 0,
       suppressedCount: suppressed,

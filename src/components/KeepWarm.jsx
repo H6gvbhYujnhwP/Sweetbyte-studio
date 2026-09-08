@@ -118,6 +118,35 @@ function Banner({ tone, children }) {
 
 function StageChip({ stage, onToggle }) {
   const on = stage.selected;
+
+  // A locked stage still shows its number — the operator wants to see how many
+  // people are sitting there — but it is not a control. Rendered as a span, not
+  // a disabled button, so there is nothing to click and nothing to double-click
+  // through. The padlock and the tooltip say why.
+  if (stage.locked) {
+    return (
+      <span
+        title="Customers are never sent keep-warm emails. This copy is written to win new business."
+        style={{
+          background: CARD,
+          border: `1px solid ${BORDER}`,
+          color: TERTIARY,
+          borderRadius: 999, padding: '6px 13px', fontSize: 13, fontWeight: 600,
+          fontFamily: 'inherit', cursor: 'default', opacity: 0.72,
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+          <rect x="4" y="11" width="16" height="10" rx="2" />
+          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+        </svg>
+        {stage.label}
+        <span style={{ fontWeight: 500, color: TERTIARY }}>{stage.count}</span>
+      </span>
+    );
+  }
+
   return (
     <button
       onClick={() => onToggle(stage.key)}
@@ -666,6 +695,7 @@ export default function KeepWarm() {
                 </Button>
                 <span style={{ fontSize: 12, color: TERTIARY }}>
                   Stages come from WorkTrackr automatically — nothing to press.
+                  Customers are locked out — these emails are written to win new business.
                 </span>
               </div>
 
