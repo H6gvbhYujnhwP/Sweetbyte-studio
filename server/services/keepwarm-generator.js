@@ -192,7 +192,146 @@ Return ONLY valid JSON, no other text, no markdown fences:
 Generate exactly ${count}.`;
 }
 
-// ── Generate ─────────────────────────────────────────────────────────────────
+// ── Regenerating one half at a time ──────────────────────────────────────────
+//
+// Two separate jobs, and conflating them wastes the operator's work. Wanting a
+// punchier subject is not wanting a different email, and being happy with the
+// subject while the body reads flat is not a reason to lose the subject.
+//
+// Both of these take the CURRENT text as it stands on screen, including
+// unsaved typing, rather than whatever was last written to the database. If
+// somebody has reworded a paragraph and then asks for a new subject line, the
+// subject has to be written for the paragraph they can see.
+
+/**
+ * A new subject line for a body that is staying as it is.
+ *
+ * `avoid` is everything already tried — subjects used on other drafts, plus the
+ * ones rejected during this sitting. Without it the model converges on the same
+ * two or three phrasings and pressing the button again appears to do nothing.
+ *
+ * Returns one line, not a list. The screen keeps the previous subjects as
+ * chips, so pressing again is how you see alternatives, and nothing is lost by
+ * showing one at a time.
+ */
+export async function generateSubject({ bodyHtml, avoid = [] }) {
+  if (!RAG) throw new Error('Company knowledge base is missing from the server — cannot generate.');
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on Studio.');
+
+  const avoidBlock = avoid.length
+    ? `\nDo not produce any of these, or a close variation of them:\n${avoid.map(a => `- "${a}"`).join('\n')}\n`
+    : '';
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 400,
+    system: SYSTEM_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `COMPANY KNOWLEDGE BASE:
+${RAG}
+
+Here is the body of an email that is already written and is NOT changing:
+
+${bodyHtml}
+${avoidBlock}
+Write ONE new subject line for it.
+
+Rules:
+- It must match what the body actually says. A subject promising something the body does not deliver is worse than a dull one.
+- Short, specific, human. Under 55 characters if you can.
+- Frame the reader's pain as a question, or set Sweetbyte against how other IT companies behave. Those are the two openers that work in Sweetbyte's own material.
+- No em dashes, no exclamation marks, no emoji, no ALL CAPS.
+- UK English. "Sweetbyte" is one word, capital S only.
+- Do not state a figure that is not in section 3 or section 7 of the knowledge base.
+
+Return ONLY the subject line as plain text. No quotes, no label, no explanation.`,
+    }],
+  });
+
+  const line = (message.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+    .trim()
+    .replace(/^["'\s]+|["'\s]+$/g, '')
+    .split('\n')[0]
+    .trim();
+
+  if (!line) throw new Error('Claude returned an empty subject line.');
+  return line.slice(0, 200);
+}
+
+/**
+ * A new body for a subject that is staying as it is.
+ *
+ * Deliberately kept on the same topic. The subject is fixed, so wandering onto
+ * a different service would produce an email whose first line contradicts its
+ * second — this is a rewrite, not a fresh idea. The current body is passed in
+ * so the model can be told what to move away from rather than accidentally
+ * reproducing it.
+ */
+export async function generateBody({ subject, currentHtml }) {
+  if (!RAG) throw new Error('Company knowledge base is missing from the server — cannot generate.');
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on Studio.');
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 2000,
+    system: SYSTEM_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `COMPANY KNOWLEDGE BASE:
+${RAG}
+
+This subject line is fixed and is NOT changing:
+
+"${subject}"
+
+This is the current body. Write a better one on the same topic. Do not reuse its sentences.
+
+${currentHtml}
+
+HARD RULES:
+1. The body must deliver what the subject promises. Same topic, fresh execution.
+2. Do not state a statistic, price, percentage or time figure that is not in section 3 or section 7 of the knowledge base.
+3. Do not name a client that is not in section 8.
+4. No surname for any team member except Sweetman.
+5. UK English. "Sweetbyte" is one word, capital S only.
+6. No em dashes, no exclamation marks, no emoji, no images.
+7. Do not claim the reader is an existing customer, do not reference a specific conversation, and do not invent anything about their business.
+8. No sign-off, no signature, no phone number, no unsubscribe line. Those are added afterwards. End on the last sentence of your final paragraph.
+
+LENGTH AND SHAPE: 120 to 200 words. Short paragraphs of two or three sentences. Plain English, first person plural, address the reader as "you". Open on something the reader recognises about their own situation, make one point well, close with a single low-pressure call to action.
+
+HTML: plain paragraphs only, each exactly <p style="${P_STYLE}">text</p>. No headings, no tables, no images, no inline links.
+
+Return ONLY valid JSON, no markdown fences:
+{"html":"<p style=\\"${P_STYLE}\\">...</p>","plain":"the same email as plain text"}`,
+    }],
+  });
+
+  const text = (message.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('');
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Claude did not return JSON. First 200 characters: ' + text.slice(0, 200));
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (err) {
+    throw new Error('Claude returned malformed JSON: ' + err.message);
+  }
+
+  const html = typeof parsed.html === 'string' ? parsed.html.trim() : '';
+  if (!html) throw new Error('Claude returned an empty email body.');
+
+  return { html, plain: typeof parsed.plain === 'string' ? parsed.plain.trim() : null };
+}
+
 
 /**
  * Ask Claude for `count` drafts.

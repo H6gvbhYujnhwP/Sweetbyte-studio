@@ -97,7 +97,6 @@ app.listen(PORT, () => {
   console.log(`[env] IDYQ_BASE_URL:         ${process.env.IDYQ_BASE_URL || 'https://idoyourquotes.com (default)'}`);
   console.log(`[env] WORKTRACKR_SERVICE_EMAIL_SECRET: ${process.env.WORKTRACKR_SERVICE_EMAIL_SECRET ? 'SET ✓' : 'MISSING ✗ (WorkTrackr service emails will 500)'}`);
   console.log(`[env] SERVICE_EMAIL_LIST:   ${process.env.SERVICE_EMAIL_LIST || 'NOT SET (recipients will not be added to a list)'}`);
-  console.log(`[env] WORKTRACKR_BASE_URL:   ${process.env.WORKTRACKR_BASE_URL || 'MISSING ✗ (keep-warm cannot refresh sales stages)'}`);
   console.log(`[env] META_ACCESS_TOKEN:     ${process.env.META_ACCESS_TOKEN ? 'SET ✓' : 'MISSING ✗ (Facebook Ads disabled)'}`);
   console.log(`[env] META_APP_SECRET:       ${process.env.META_APP_SECRET   ? 'SET ✓' : 'MISSING ✗ (calls unsigned)'}`);
   console.log(`[env] META_APP_ID:           ${process.env.META_APP_ID       ? 'SET ✓' : 'MISSING ✗'}`);

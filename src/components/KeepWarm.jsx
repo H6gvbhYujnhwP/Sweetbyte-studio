@@ -207,7 +207,10 @@ function DraftCard({ draft, onOpen, onStatus, busy }) {
  * a rich editor would quietly rewrite them into something that renders
  * differently in Word's mail renderer.
  */
-function ReadPanel({ state, onClose, onChange, onSave, onStatus, saving }) {
+function ReadPanel({
+  state, onClose, onChange, onSave, onStatus, saving,
+  onRegenerate, regenerating, subjectHistory, onPickSubject, bodyUndo, onUndoBody, regenError,
+}) {
   if (!state) return null;
   const { draft, preview } = state;
 
@@ -242,9 +245,40 @@ function ReadPanel({ state, onClose, onChange, onSave, onStatus, saving }) {
               border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', marginBottom: 4,
             }}
           />
-          <div style={{ fontSize: 12, color: draft.subject.length > 60 ? AMBER : TERTIARY, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: draft.subject.length > 60 ? AMBER : TERTIARY, marginBottom: 8 }}>
             {draft.subject.length} characters{draft.subject.length > 60 ? ' — long subjects get cut off in most inboxes' : ''}
           </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+            <Button
+              disabled={regenerating || saving}
+              onClick={() => onRegenerate('subject')}
+            >
+              {regenerating === 'subject' ? 'Writing a new subject…' : 'New subject line'}
+            </Button>
+            <span style={{ fontSize: 12, color: TERTIARY }}>Rewrites the subject only. The email below stays as it is.</span>
+          </div>
+
+          {subjectHistory.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 5 }}>Earlier subject lines — click one to put it back</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {subjectHistory.map((sub, i) => (
+                  <button
+                    key={i}
+                    onClick={() => onPickSubject(sub)}
+                    style={{
+                      background: CARD, border: `1px solid ${BORDER}`, color: MUTED,
+                      borderRadius: 999, padding: '4px 11px', fontSize: 12,
+                      cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                    }}
+                  >{sub}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {regenError && <Banner tone="bad">{regenError}</Banner>}
 
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 5 }}>How it will look</div>
           <div
@@ -268,9 +302,22 @@ function ReadPanel({ state, onClose, onChange, onSave, onStatus, saving }) {
               lineHeight: 1.6, resize: 'vertical',
             }}
           />
-          <div style={{ fontSize: 12, color: TERTIARY, marginTop: 6, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: TERTIARY, marginTop: 6, marginBottom: 10 }}>
             Keep each paragraph wrapped in its {'<p style="…">'} tag — that styling is what makes it
             render correctly in Outlook. Saving an edit clears the approval, so re-approve afterwards.
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
+            <Button
+              disabled={regenerating || saving}
+              onClick={() => onRegenerate('body')}
+            >
+              {regenerating === 'body' ? 'Rewriting the email…' : 'Rewrite the email'}
+            </Button>
+            {bodyUndo && (
+              <Button disabled={regenerating || saving} onClick={onUndoBody}>Put the old one back</Button>
+            )}
+            <span style={{ fontSize: 12, color: TERTIARY }}>Rewrites the email only, on the same subject line above.</span>
           </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -300,9 +347,6 @@ export default function KeepWarm() {
   const [listMode, setListMode]   = useState('included');
   const [search, setSearch]       = useState('');
 
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState(null);
-
   const [count, setCount]         = useState(3);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError]   = useState(null);
@@ -314,6 +358,17 @@ export default function KeepWarm() {
 
   const [open, setOpen]           = useState(null);
   const [saving, setSaving]       = useState(false);
+
+  // Regeneration is per-half, so this holds which half is running rather than
+  // a plain boolean — otherwise both buttons grey out and neither says why.
+  const [regenerating, setRegenerating] = useState(null);
+  const [regenError, setRegenError]     = useState(null);
+
+  // Nothing a regenerate replaces is thrown away. Old subjects come back as
+  // clickable chips and the previous body can be restored, so pressing the
+  // button is never a decision you have to be sure about before you press it.
+  const [subjectHistory, setSubjectHistory] = useState([]);
+  const [bodyUndo, setBodyUndo]             = useState(null);
 
   const loadOverview = useCallback(async () => {
     try {
@@ -387,23 +442,6 @@ export default function KeepWarm() {
     }
   }
 
-  async function refreshStages() {
-    setRefreshing(true);
-    setRefreshMsg(null);
-    try {
-      const r = await fetch('/api/keepwarm/refresh-stages', { method: 'POST' });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Refresh failed');
-      setRefreshMsg({ tone: 'info', text: `Read ${d.count} companies from WorkTrackr.` });
-      await loadOverview();
-      if (showList) loadAudience(listMode, search);
-    } catch (err) {
-      setRefreshMsg({ tone: 'bad', text: err.message });
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
   async function generate() {
     setGenerating(true);
     setGenError(null);
@@ -450,9 +488,77 @@ export default function KeepWarm() {
       const r = await fetch(`/api/keepwarm/drafts/${id}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not open');
+      setSubjectHistory([]);
+      setBodyUndo(null);
+      setRegenError(null);
       setOpen({ draft: d.draft, preview: d.preview });
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  async function regenerate(part) {
+    if (!open) return;
+    setRegenerating(part);
+    setRegenError(null);
+
+    // Captured before the call so the undo target is what was on screen when
+    // the button was pressed, not whatever state has become by the time the
+    // response lands.
+    const priorSubject = open.draft.subject;
+    const priorBody    = open.draft.html_body;
+
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${open.draft.id}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          part,
+          subject: open.draft.subject,
+          html: open.draft.html_body,
+          avoid: part === 'subject' ? subjectHistory : undefined,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not regenerate');
+
+      if (part === 'subject') {
+        setSubjectHistory(h => (h.includes(priorSubject) ? h : [priorSubject, ...h]).slice(0, 8));
+      } else {
+        setBodyUndo(priorBody);
+      }
+      setOpen({ draft: d.draft, preview: d.preview });
+      await loadDrafts();
+    } catch (err) {
+      setRegenError(err.message);
+    } finally {
+      setRegenerating(null);
+    }
+  }
+
+  // Restoring is an ordinary save of the old text, so it goes down the same
+  // path as any other edit and behaves identically — including clearing the
+  // approval, which is right: the draft has changed again.
+  async function restoreBody() {
+    if (!open || !bodyUndo) return;
+    const restore = bodyUndo;
+    setBodyUndo(null);
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${open.draft.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject: open.draft.subject, html: restore }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not restore');
+      setOpen({ draft: d.draft, preview: d.preview });
+      await loadDrafts();
+    } catch (err) {
+      setRegenError(err.message);
+      setBodyUndo(restore);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -492,11 +598,12 @@ export default function KeepWarm() {
 
         {error && <Banner tone="bad">{error}</Banner>}
 
-        {!loading && !cfg.stagePullConfigured && (
+        {!loading && !cfg.stagesEverReceived && (
           <Banner tone="warn">
-            Studio cannot read sales stages from WorkTrackr yet — set <strong>WORKTRACKR_BASE_URL</strong> on
-            the Sweetbyte Studio service, and <strong>STUDIO_BRIDGE_ORG_ID</strong> on WorkTrackr. Until
-            then every company shows as "no stage" and the audience will be empty.
+            WorkTrackr has not sent any sales stages across yet, so everyone below shows as
+            "no stage set" and the audience is empty. WorkTrackr pushes them on its own — every time
+            somebody changes a stage, and as a full sweep every half hour. If this is still showing
+            an hour after the WorkTrackr deploy, check its logs for lines beginning <strong>[stage-sync]</strong>.
           </Banner>
         )}
         {!loading && !cfg.ragLoaded && (
@@ -518,7 +625,9 @@ export default function KeepWarm() {
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
                 <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0 }}>Who is in the loop</h2>
                 <div style={{ fontSize: 13, color: MUTED }}>
-                  Stages last read from WorkTrackr: {fmt(overview.stageRefresh.at)}
+                  {overview.stageRefresh.at
+                    ? `Stages last received from WorkTrackr: ${fmt(overview.stageRefresh.at)} · ${overview.stageRefresh.withStage} of ${overview.stageRefresh.held} companies have a stage`
+                    : 'WorkTrackr has not sent any stages yet'}
                 </div>
               </div>
 
@@ -551,15 +660,13 @@ export default function KeepWarm() {
                 </button>
               </div>
 
-              {refreshMsg && <Banner tone={refreshMsg.tone}>{refreshMsg.text}</Banner>}
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Button onClick={refreshStages} disabled={refreshing || !cfg.stagePullConfigured}>
-                  {refreshing ? 'Reading WorkTrackr…' : 'Refresh stages from WorkTrackr'}
-                </Button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <Button onClick={() => setShowList(v => !v)}>
                   {showList ? 'Hide the list' : 'Show the list'}
                 </Button>
+                <span style={{ fontSize: 12, color: TERTIARY }}>
+                  Stages come from WorkTrackr automatically — nothing to press.
+                </span>
               </div>
 
               {showList && (
@@ -670,6 +777,13 @@ export default function KeepWarm() {
         onChange={(patch) => setOpen(o => ({ ...o, draft: { ...o.draft, ...patch } }))}
         onSave={saveOpen}
         onStatus={setStatus}
+        onRegenerate={regenerate}
+        regenerating={regenerating}
+        regenError={regenError}
+        subjectHistory={subjectHistory}
+        onPickSubject={(sub) => setOpen(o => ({ ...o, draft: { ...o.draft, subject: sub } }))}
+        bodyUndo={bodyUndo}
+        onUndoBody={restoreBody}
       />
     </div>
   );

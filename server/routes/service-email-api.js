@@ -50,6 +50,7 @@ import {
   verifyUnsubToken,
 } from '../services/service-email-sender.js';
 import { getCatalogue } from '../services/service-email-templates.js';
+import { applyStages } from '../services/keepwarm-store.js';
 
 const router = Router();
 
@@ -178,6 +179,42 @@ router.get('/status', requireBridgeAuth, (req, res) => {
     sentServices: email ? sentServiceKeys(externalCompanyId, email) : [],
     suppressed: email ? isSuppressed(email) : false,
   });
+});
+
+/**
+ * POST /api/service-emails/stages
+ * Body: { companies: [{ id, name, primaryContact, stage }], snapshot: bool, reason }
+ *
+ * WorkTrackr telling Studio what the sales stages are. Studio's keep-warm
+ * emails go to everyone who has had the introduction EXCEPT those at excluded
+ * stages, and the stage is the one thing Studio cannot work out for itself.
+ *
+ * Lives on THIS router rather than a new one so it rides the connection that
+ * already works — same secret, same signing, same base URL WorkTrackr has had
+ * configured since the send panel shipped. A separate bridge would have meant
+ * new credentials on two more services for no gain.
+ *
+ * `snapshot: true` means the payload is the complete set; anything Studio holds
+ * that is absent has its stage cleared, so a company deleted in WorkTrackr stops
+ * being emailed rather than keeping the stage it had on the day it vanished.
+ * A single-company push must NOT set it.
+ *
+ * Returns what was applied rather than a bare ok, so the WorkTrackr log records
+ * a number somebody can sanity-check against the pipeline.
+ */
+router.post('/stages', requireBridgeAuth, (req, res) => {
+  const { companies, snapshot } = req.body || {};
+  if (!Array.isArray(companies)) {
+    return res.status(400).json({ error: 'companies must be an array' });
+  }
+
+  try {
+    const result = applyStages({ companies, snapshot: !!snapshot });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[service-email] stage apply failed:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

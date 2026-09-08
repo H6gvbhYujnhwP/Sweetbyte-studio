@@ -40,14 +40,11 @@
  * four-table change. These are CREATE TABLE IF NOT EXISTS run once at import —
  * identical idempotency, much smaller blast radius.
  *
- * Env:
- *   WORKTRACKR_SERVICE_EMAIL_SECRET  (required for the stage pull) — the same
- *                                    shared secret the outbound bridge uses.
- *   WORKTRACKR_BASE_URL              (required for the stage pull) — WorkTrackr's
- *                                    origin, e.g. https://worktrackr.cloud
+ * Env: none of its own. Stages arrive over the bridge WorkTrackr already uses
+ * for sending, which is authenticated by WORKTRACKR_SERVICE_EMAIL_SECRET — the
+ * variable that is already set on both services and already working.
  */
 
-import crypto from 'crypto';
 import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { isSuppressed } from './service-email-sender.js';
@@ -177,65 +174,48 @@ export function saveSettings({ stages, includeNoStage }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage pull from WorkTrackr
+// Stages, as pushed to us by WorkTrackr
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SIGNATURE_TTL_SECONDS = 120;
+/**
+ * WorkTrackr sends stages here; Studio never goes and asks for them.
+ *
+ * That direction is not an accident and not laziness. WorkTrackr has been
+ * calling Studio since the service-email panel shipped — the base URL and the
+ * shared secret are configured and proven on that path. A pull would have meant
+ * a second connection, pointing the other way, with its own base URL and its
+ * own tenancy pin configured on two more services. Every one of those is a
+ * thing that can be quietly wrong, and the failure looks identical to "nobody
+ * is a prospect".
+ *
+ * The trade is that Studio cannot ask for a refresh on demand. WorkTrackr
+ * pushes on every stage change and reconciles the whole set every half hour, so
+ * the freshness is the same; what is lost is a button, and a button that only
+ * ever confirms what already happened is not worth a second set of credentials.
+ *
+ * The write is arriving over the HMAC-signed bridge in routes/service-email-api.js.
+ */
 
-function worktrackrBaseUrl() {
-  return String(process.env.WORKTRACKR_BASE_URL || '').replace(/\/+$/, '');
-}
-
-export function stagePullConfigured() {
-  return !!(process.env.WORKTRACKR_SERVICE_EMAIL_SECRET && worktrackrBaseUrl());
-}
-
-async function callWorkTrackr(method, path) {
-  const secret = process.env.WORKTRACKR_SERVICE_EMAIL_SECRET;
-  if (!secret) throw new Error('WORKTRACKR_SERVICE_EMAIL_SECRET is not set on Studio');
-  const base = worktrackrBaseUrl();
-  if (!base) throw new Error('WORKTRACKR_BASE_URL is not set on Studio');
-
-  const expiry = Math.floor(Date.now() / 1000) + SIGNATURE_TTL_SECONDS;
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const payload = `${expiry}.${nonce}.${method}.${path}`;
-  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-
-  const res = await fetch(`${base}/api/studio-bridge${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-WT-Signature': `${expiry}.${nonce}.${sig}`,
-    },
-  });
-
-  let json = null;
-  try { json = await res.json(); } catch { /* non-JSON error page */ }
-  if (!res.ok) {
-    const detail = (json && json.error) ? json.error : `HTTP ${res.status}`;
-    throw new Error(`WorkTrackr refused the stage pull: ${detail}`);
-  }
-  return json;
-}
+const RECEIPT_KEY = 'lastStageReceipt';
 
 /**
- * Replace the cached stage table with what WorkTrackr says right now.
+ * Apply a batch of stages.
  *
- * Done as a delete-then-insert inside one transaction rather than an upsert.
- * An upsert leaves behind rows for companies that have since been deleted in
- * WorkTrackr, and a stale row here means mailing somebody whose record is gone.
- * The table is a cache of somebody else's truth; rebuilding it wholesale is the
- * honest representation of that.
+ * `snapshot` is the important flag. A snapshot is WorkTrackr saying "this is
+ * every company I have for you" — so anything Studio holds that is NOT in the
+ * payload has been deleted over there, and its stage is cleared. Clearing it
+ * rather than deleting the row keeps the person visible on the screen as "no
+ * stage set", which is excluded by default: a company vanishing from WorkTrackr
+ * fails towards not emailing them, which is the only safe direction.
  *
- * The write only happens once the network call has succeeded, so a WorkTrackr
- * outage leaves the previous cache intact rather than emptying the audience.
+ * A non-snapshot batch is one company that just changed, and says nothing about
+ * the companies it omits. Treating it as a snapshot would clear every stage in
+ * the table every time somebody edited one record.
  */
-export async function refreshStages() {
-  const data = await callWorkTrackr('GET', '/stages');
-  const companies = Array.isArray(data?.companies) ? data.companies : [];
+export function applyStages({ companies, snapshot = false }) {
+  const rows = Array.isArray(companies) ? companies.filter(c => c && c.id) : [];
 
-  const wipe = db.prepare('DELETE FROM keepwarm_stages');
-  const insert = db.prepare(`
+  const upsert = db.prepare(`
     INSERT INTO keepwarm_stages (external_company_id, company_name, primary_contact, stage, refreshed_at)
     VALUES (?, ?, ?, ?, datetime('now'))
     ON CONFLICT(external_company_id) DO UPDATE SET
@@ -245,22 +225,67 @@ export async function refreshStages() {
       refreshed_at    = datetime('now')
   `);
 
-  const tx = db.transaction((rows) => {
-    wipe.run();
-    for (const c of rows) {
-      if (!c || !c.id) continue;
-      insert.run(String(c.id), c.name || null, c.primaryContact || null, c.stage || null);
+  let cleared = 0;
+
+  const tx = db.transaction((list) => {
+    for (const c of list) {
+      upsert.run(String(c.id), c.name || null, c.primaryContact || null, c.stage || null);
+    }
+
+    if (snapshot) {
+      // Anything not mentioned in a complete payload no longer exists upstream.
+      // Done as "not in this id set" rather than "older than this run" because a
+      // timestamp comparison would also catch rows the same transaction just
+      // wrote if the clock ticked mid-batch.
+      const ids = list.map(c => String(c.id));
+      if (ids.length === 0) {
+        const r = db.prepare(`UPDATE keepwarm_stages SET stage = NULL WHERE stage IS NOT NULL`).run();
+        cleared = r.changes;
+      } else {
+        const placeholders = ids.map(() => '?').join(',');
+        const r = db.prepare(`
+          UPDATE keepwarm_stages
+             SET stage = NULL
+           WHERE stage IS NOT NULL
+             AND external_company_id NOT IN (${placeholders})
+        `).run(...ids);
+        cleared = r.changes;
+      }
     }
   });
-  tx(companies);
+  tx(rows);
 
-  console.log(`[keepwarm] stage refresh: ${companies.length} companies from WorkTrackr`);
-  return { count: companies.length, at: new Date().toISOString() };
+  writeSetting(RECEIPT_KEY, {
+    at: new Date().toISOString(),
+    count: rows.length,
+    snapshot: !!snapshot,
+  });
+
+  console.log(`[keepwarm] stages received: ${rows.length} company/companies${snapshot ? ` (snapshot, ${cleared} cleared)` : ''}`);
+  return { applied: rows.length, cleared, snapshot: !!snapshot };
 }
 
+/**
+ * When WorkTrackr last told us anything, and how many companies we hold.
+ * A null `at` means WorkTrackr has never pushed — which is the difference
+ * between "everyone genuinely has no stage" and "the two services have never
+ * spoken", and the screen says so in those words.
+ */
 export function lastStageRefresh() {
-  const row = db.prepare('SELECT MAX(refreshed_at) AS at, COUNT(*) AS n FROM keepwarm_stages').get();
-  return { at: row?.at || null, count: row?.n || 0 };
+  const receipt = readSetting(RECEIPT_KEY) || {};
+  const row = db.prepare(`
+    SELECT COUNT(*) AS n,
+           SUM(CASE WHEN stage IS NOT NULL THEN 1 ELSE 0 END) AS staged
+      FROM keepwarm_stages
+  `).get();
+
+  return {
+    at: receipt.at || null,
+    lastCount: receipt.count || 0,
+    wasSnapshot: !!receipt.snapshot,
+    held: row?.n || 0,
+    withStage: row?.staged || 0,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

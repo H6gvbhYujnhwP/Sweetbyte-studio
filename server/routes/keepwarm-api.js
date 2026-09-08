@@ -22,9 +22,7 @@ import {
   STAGE_LABELS,
   getSettings,
   saveSettings,
-  refreshStages,
   lastStageRefresh,
-  stagePullConfigured,
   stageCounts,
   buildAudience,
   createBatch,
@@ -38,6 +36,8 @@ import {
 } from '../services/keepwarm-store.js';
 import {
   generateEmails,
+  generateSubject,
+  generateBody,
   renderEmailHtml,
   ragLoaded,
   ALLOWED_COUNTS,
@@ -71,7 +71,7 @@ router.get('/overview', (req, res) => {
       excludedCount: excluded.length,
       stageRefresh: refresh,
       config: {
-        stagePullConfigured: stagePullConfigured(),
+        stagesEverReceived: !!refresh.at,
         ragLoaded: ragLoaded(),
         anthropicConfigured: !!process.env.ANTHROPIC_API_KEY,
       },
@@ -85,26 +85,14 @@ router.get('/overview', (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stage cache
+//
+// There is no refresh route here on purpose. WorkTrackr pushes stages to Studio
+// over the signed bridge in routes/service-email-api.js — immediately when
+// somebody changes one, and as a full reconcile every half hour. Studio has no
+// outbound connection to WorkTrackr and deliberately does not gain one just to
+// power a button, because that button would need its own base URL and its own
+// tenancy pin configured on two more services.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Pull the current sales stages from WorkTrackr.
- *
- * The full error is passed through rather than flattened to "refresh failed".
- * Every realistic cause here — wrong base URL, mismatched secret, the org not
- * pinned on the WorkTrackr side — is fixed by changing one environment
- * variable, and the operator can only work out which one from the actual
- * message.
- */
-router.post('/refresh-stages', async (req, res) => {
-  try {
-    const result = await refreshStages();
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    console.error('[keepwarm] stage refresh failed:', err.message);
-    res.status(502).json({ error: err.message });
-  }
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings
@@ -266,6 +254,68 @@ router.put('/drafts/:id', (req, res) => {
     });
   } catch (err) {
     console.error('[keepwarm] update draft failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /drafts/:id/regenerate
+ * Body: { part: 'subject' | 'body', subject, html, avoid?: [string] }
+ *
+ * Rewrites ONE half and leaves the other exactly alone.
+ *
+ * `subject` and `html` are the text as it currently stands on screen, including
+ * anything typed but not yet saved. Reading the stored row instead would mean
+ * writing a subject line for a body the operator can no longer see, which is
+ * the sort of thing that looks like the model ignoring you.
+ *
+ * The result is saved immediately rather than left pending. A regenerate is an
+ * explicit act, and leaving it unsaved means closing the panel silently throws
+ * it away. Saving also clears any approval, which is correct for the same
+ * reason editing does: the tick referred to wording that no longer exists.
+ */
+router.post('/drafts/:id/regenerate', async (req, res) => {
+  const { part, subject, html, avoid } = req.body || {};
+  if (part !== 'subject' && part !== 'body') {
+    return res.status(400).json({ error: "part must be 'subject' or 'body'" });
+  }
+
+  const row = getDraft(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not_found' });
+  if (row.status === 'sent') return res.status(409).json({ error: 'already_sent' });
+
+  const currentSubject = (subject !== undefined && subject !== null) ? String(subject) : row.subject;
+  const currentHtml    = (html    !== undefined && html    !== null) ? String(html)    : row.html_body;
+
+  try {
+    let result;
+
+    if (part === 'subject') {
+      // Everything already used platform-wide, plus whatever this sitting has
+      // already produced and moved on from. Both matter: the first stops a
+      // repeat of a live email, the second stops the button appearing to do
+      // nothing when pressed twice.
+      const used = previousSubjects(30).map(p => p.subject);
+      const tried = Array.isArray(avoid) ? avoid.map(String) : [];
+      const newSubject = await generateSubject({
+        bodyHtml: currentHtml,
+        avoid: [...new Set([...tried, ...used, currentSubject])].filter(Boolean).slice(0, 40),
+      });
+      result = updateDraft(req.params.id, { subject: newSubject, html: currentHtml });
+    } else {
+      const body = await generateBody({ subject: currentSubject, currentHtml });
+      result = updateDraft(req.params.id, { subject: currentSubject, html: body.html });
+    }
+
+    if (!result) return res.status(404).json({ error: 'not_found' });
+    if (result.error) return res.status(409).json({ error: result.error });
+
+    res.json({
+      draft: result,
+      preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
+    });
+  } catch (err) {
+    console.error('[keepwarm] regenerate failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
