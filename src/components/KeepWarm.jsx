@@ -52,8 +52,15 @@ function fmt(ts) {
   return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-// Strip tags for the card preview. Only ever used for the two-line teaser on a
-// card — the full email is rendered properly in the read view.
+// Slot dates arrive as plain YYYY-MM-DD with no time and no zone. Parsing them
+// as UTC and printing them as UTC keeps the day the server meant — read as
+// local time, a date can slide back to the previous evening.
+function fmtDate(d) {
+  if (!d) return '—';
+  const x = new Date(d + 'T12:00:00Z');
+  if (isNaN(x)) return d;
+  return x.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
 function teaser(html, len = 150) {
   const t = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   return t.length > len ? t.slice(0, len) + '…' : t;
@@ -364,9 +371,298 @@ function ReadPanel({
   );
 }
 
+// The send route refuses in six named ways. Each one is a decision for the
+// operator rather than a fault to retry, so each gets a sentence saying what to
+// do about it — a bare "not_configured" on screen is a support call.
+function sendReason(d) {
+  const n = d && d.count;
+  const cap = d && d.cap;
+  switch (d && d.error) {
+    case 'not_configured':
+      return 'No from-address is set, so nothing was sent. SERVICE_EMAIL_FROM and SERVICE_EMAIL_FROM_NAME need filling in on Render.';
+    case 'not_approved':
+      return 'That draft has not been approved yet. Approve it on the Drafts tab first.';
+    case 'already_sent':
+      return 'That draft has already gone out once.';
+    case 'run_in_progress':
+      return 'A send is already running. One at a time — wait for it to finish.';
+    case 'empty_audience':
+      return 'Nobody qualifies under the current stage rule, so there was nothing to send.';
+    case 'over_cap':
+      return `The audience is ${n} people, above the safety limit of ${cap}. That usually means stages have come across wrong from WorkTrackr. Nothing was sent — check the Audience tab.`;
+    case 'no_draft':
+      return 'That draft no longer exists.';
+    default:
+      return (d && d.error) || 'Could not send.';
+  }
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+//
+// Module level, like everything else here — see the SUB-COMPONENT RULE at the
+// top of the file.
+
+const TABS = [
+  { key: 'audience', label: 'Audience' },
+  { key: 'drafts',   label: 'Drafts' },
+  { key: 'schedule', label: 'Schedule' },
+  { key: 'sent',     label: 'Sent' },
+];
+
+function TabBar({ tab, onPick }) {
+  return (
+    <div style={{ display: 'flex', gap: 22, borderBottom: `1px solid ${BORDER}`, marginBottom: 22 }}>
+      {TABS.map(t => (
+        <button
+          key={t.key}
+          onClick={() => onPick(t.key)}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 14, padding: '0 0 9px', color: tab === t.key ? TEXT : MUTED,
+            fontWeight: tab === t.key ? 700 : 500,
+            borderBottom: `2px solid ${tab === t.key ? SB.primary : 'transparent'}`,
+          }}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Undo bar ─────────────────────────────────────────────────────────────────
+//
+// Shown while a run is queued but not yet started. The countdown is honest: at
+// zero the worker picks the run up, and the button genuinely stops working,
+// because from that point the first messages are with SES. Better to watch a
+// number run out than to press Undo and be told afterwards it was too late.
+
+function UndoBar({ secondsLeft, count, onUndo, undoing }) {
+  return (
+    <div style={{
+      background: AMBER_BG, border: `1px solid ${AMBER}`, borderRadius: 10,
+      padding: '13px 16px', marginBottom: 16,
+      display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+    }}>
+      <div style={{ fontSize: 14, color: AMBER, flex: 1, minWidth: 200 }}>
+        <strong>Sending to {count} {count === 1 ? 'person' : 'people'} in {secondsLeft}s.</strong>
+        {' '}Nothing has left yet.
+      </div>
+      <Button tone="danger" disabled={undoing} onClick={onUndo}>
+        {undoing ? 'Stopping…' : 'Undo'}
+      </Button>
+    </div>
+  );
+}
+
+// ── Schedule ─────────────────────────────────────────────────────────────────
+
+function SlotRow({ slot, canSend, onSend, sending }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '11px 14px', borderBottom: `1px solid ${BORDER}`,
+    }}>
+      <div style={{ width: 92, fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
+        {fmtDate(slot.date)}
+      </div>
+      <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {slot.subject}
+      </div>
+      <span style={{
+        fontSize: 12, background: GOOD_BG, color: GOOD,
+        padding: '3px 10px', borderRadius: 999, whiteSpace: 'nowrap',
+      }}>Approved</span>
+      <div style={{ width: 92, textAlign: 'right', fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
+        {slot.projectedCount} people
+      </div>
+      <div style={{ width: 96, textAlign: 'right' }}>
+        {canSend
+          ? <Button tone="primary" disabled={sending} onClick={() => onSend(slot)}>
+              {sending ? 'Queuing…' : 'Send'}
+            </Button>
+          : <span style={{ fontSize: 12, color: TERTIARY }}>Queued</span>}
+      </div>
+    </div>
+  );
+}
+
+function ScheduleView({ data, onSend, sending, sendError }) {
+  if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
+
+  const active = data.activeRun;
+  const running = active && active.status === 'sending';
+
+  return (
+    <>
+      {sendError && <Banner tone="bad">{sendError}</Banner>}
+
+      {running && (
+        <Card>
+          <div style={{ fontSize: 16, fontWeight: 700, color: TEXT, marginBottom: 4 }}>Sending now</div>
+          <div style={{ fontSize: 14, color: TEXT, marginBottom: 10 }}>{active.subject}</div>
+          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
+            {active.progress.sent} of {active.progress.total} sent
+            {active.progress.suppressed > 0 && `, ${active.progress.suppressed} skipped as unsubscribed`}
+            {active.progress.failed > 0 && `, ${active.progress.failed} failed`}.
+            {' '}A thousand takes a couple of minutes. You can leave this page — it carries on without you.
+          </div>
+        </Card>
+      )}
+
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0 }}>Next {data.slots.length || ''} sends</h2>
+          <div style={{ fontSize: 13, color: MUTED }}>
+            Every {data.config.cadenceDays} days
+            {data.nextDueDate ? ` · next due ${fmtDate(data.nextDueDate)}` : ' · nothing sent yet, so the first is due whenever you are'}
+          </div>
+        </div>
+      </Card>
+
+      {data.slots.length === 0 ? (
+        <Card><div style={{ fontSize: 14, color: MUTED }}>
+          Nothing approved yet. Approve a draft on the Drafts tab and it will line up here.
+        </div></Card>
+      ) : (
+        <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
+          {data.slots.map((s, i) => (
+            <SlotRow
+              key={s.draftId}
+              slot={s}
+              // Only the top slot is sendable, and only when nothing else is in
+              // flight. One send at a time — two overlapping runs would land two
+              // emails on the same person within minutes, which reads as a fault
+              // whatever the copy says.
+              canSend={i === 0 && !active}
+              onSend={onSend}
+              sending={sending}
+            />
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.6, paddingBottom: 40 }}>
+        The headcount is who qualifies today. The real list is fixed at the moment you press send,
+        because stages keep moving in WorkTrackr. Dates after the first are a projection —
+        nothing goes out on its own, you press the button each time.
+      </div>
+    </>
+  );
+}
+
+// ── Sent ─────────────────────────────────────────────────────────────────────
+
+function SentRow({ run, onOpen, open, recipients }) {
+  return (
+    <div style={{ borderBottom: `1px solid ${BORDER}` }}>
+      <div
+        onClick={() => onOpen(run.id)}
+        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', cursor: 'pointer' }}
+      >
+        <div style={{ width: 92, fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>{fmt(run.sentAt)}</div>
+        <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {run.subject}
+        </div>
+        {run.status === 'cancelled'
+          ? <span style={{ fontSize: 12, background: '#eeeeec', color: MUTED, padding: '3px 10px', borderRadius: 999 }}>Undone</span>
+          : <div style={{ width: 76, textAlign: 'right', fontSize: 13, color: MUTED }}>{run.sent} sent</div>}
+        <div style={{ width: 92, textAlign: 'right', fontSize: 13, color: run.optOuts > 0 ? AMBER : MUTED, whiteSpace: 'nowrap' }}>
+          {run.optOuts} opt-{run.optOuts === 1 ? 'out' : 'outs'}
+        </div>
+        <i style={{ fontSize: 12, color: TERTIARY, fontStyle: 'normal', width: 14, textAlign: 'right' }}>{open ? '▴' : '▾'}</i>
+      </div>
+
+      {open && (
+        <div style={{ background: BG, borderTop: `1px solid ${BORDER}`, maxHeight: 320, overflowY: 'auto' }}>
+          {run.failed > 0 && (
+            <div style={{ padding: '9px 14px', fontSize: 13, color: DANGER }}>
+              {run.failed} did not send. They are marked below with the reason.
+            </div>
+          )}
+          {!recipients && <div style={{ padding: '12px 14px', fontSize: 13, color: MUTED }}>Loading…</div>}
+          {recipients && recipients.length === 0 && (
+            <div style={{ padding: '12px 14px', fontSize: 13, color: MUTED }}>No recipients recorded.</div>
+          )}
+          {recipients && recipients.map((r, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', borderBottom: `1px solid ${BORDER}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {r.contact_name ? `${r.contact_name} — ` : ''}{r.company_name || 'Unknown company'}
+                </div>
+                <div style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.email}</div>
+              </div>
+              <span style={{
+                fontSize: 12, whiteSpace: 'nowrap', padding: '2px 9px', borderRadius: 999,
+                background: r.status === 'sent' ? GOOD_BG : r.status === 'failed' ? DANGER_BG : '#eeeeec',
+                color:      r.status === 'sent' ? GOOD    : r.status === 'failed' ? DANGER    : MUTED,
+              }}>
+                {r.status === 'sent' ? 'Sent'
+                  : r.status === 'failed' ? 'Failed'
+                    : r.status === 'suppressed' ? 'Unsubscribed'
+                      : r.status === 'cancelled' ? 'Undone' : r.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SentView({ runs, openId, onOpen, recipients }) {
+  if (!runs) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
+
+  const real = runs.filter(r => r.status === 'sent');
+  const totalSent = real.reduce((n, r) => n + r.sent, 0);
+  const totalOut  = real.reduce((n, r) => n + r.optOuts, 0);
+
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
+        <Card style={{ marginBottom: 0 }}>
+          <div style={{ fontSize: 13, color: MUTED, marginBottom: 6 }}>Emails sent</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: SB.strong }}>{totalSent}</div>
+        </Card>
+        <Card style={{ marginBottom: 0 }}>
+          <div style={{ fontSize: 13, color: MUTED, marginBottom: 6 }}>Sends so far</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: SB.strong }}>{real.length}</div>
+        </Card>
+        <Card style={{ marginBottom: 0 }}>
+          <div style={{ fontSize: 13, color: MUTED, marginBottom: 6 }}>Opted out since</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: totalOut > 0 ? AMBER : SB.strong }}>{totalOut}</div>
+        </Card>
+      </div>
+
+      {runs.length === 0 ? (
+        <Card><div style={{ fontSize: 14, color: MUTED }}>Nothing has been sent yet.</div></Card>
+      ) : (
+        <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, overflow: 'hidden' }}>
+          {runs.map(r => (
+            <SentRow
+              key={r.id}
+              run={r}
+              open={openId === r.id}
+              recipients={openId === r.id ? recipients : null}
+              onOpen={onOpen}
+            />
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.6, padding: '12px 0 40px' }}>
+        There is no open tracking on these emails, by choice — Apple Mail and Gmail load images by
+        themselves, so an open rate mostly counts software, not readers. Opt-outs are exact, and they
+        are the number that tells you a piece of copy misfired. Replies land in the normal inbox.
+      </div>
+    </>
+  );
+}
+
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function KeepWarm() {
+  const [tab, setTab]             = useState('audience');
   const [overview, setOverview]   = useState(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
@@ -399,6 +695,16 @@ export default function KeepWarm() {
   const [subjectHistory, setSubjectHistory] = useState([]);
   const [bodyUndo, setBodyUndo]             = useState(null);
 
+  // ── Sending ────────────────────────────────────────────────────────────────
+  const [schedule, setSchedule]     = useState(null);
+  const [sentList, setSentList]     = useState(null);
+  const [sending, setSending]       = useState(false);
+  const [sendError, setSendError]   = useState(null);
+  const [undoing, setUndoing]       = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [openRun, setOpenRun]       = useState(null);
+  const [runRows, setRunRows]       = useState(null);
+
   const loadOverview = useCallback(async () => {
     try {
       const r = await fetch('/api/keepwarm/overview');
@@ -429,7 +735,118 @@ export default function KeepWarm() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadSchedule = useCallback(async () => {
+    try {
+      const r = await fetch('/api/keepwarm/schedule');
+      const d = await r.json();
+      if (r.ok) setSchedule(d);
+    } catch { /* leave the previous view on screen rather than blanking it */ }
+  }, []);
+
+  const loadSent = useCallback(async () => {
+    try {
+      const r = await fetch('/api/keepwarm/sent');
+      const d = await r.json();
+      if (r.ok) setSentList(d.runs || []);
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => { loadOverview(); loadDrafts(); }, [loadOverview, loadDrafts]);
+
+  // Load a tab's data when you land on it, so switching back after a send shows
+  // the new state rather than a stale one.
+  useEffect(() => {
+    if (tab === 'schedule') loadSchedule();
+    if (tab === 'sent') loadSent();
+  }, [tab, loadSchedule, loadSent]);
+
+  // While a run is queued or sending, refresh every few seconds. Stops as soon
+  // as the run finishes — no point polling an idle screen forever.
+  useEffect(() => {
+    const active = schedule && schedule.activeRun;
+    if (tab !== 'schedule' || !active) return;
+    const t = setInterval(() => {
+      loadSchedule();
+      loadDrafts();
+    }, 3000);
+    return () => clearInterval(t);
+  }, [tab, schedule, loadSchedule, loadDrafts]);
+
+  // The undo countdown. Driven off the run's own send_after rather than a local
+  // timer started when the button was pressed, so a page refresh mid-window
+  // shows the true time left instead of restarting the clock.
+  useEffect(() => {
+    const active = schedule && schedule.activeRun;
+    if (!active || active.status !== 'queued') { setSecondsLeft(0); return; }
+    const target = new Date(active.sendAfter.replace(' ', 'T') + 'Z').getTime();
+    const tick = () => setSecondsLeft(Math.max(0, Math.ceil((target - Date.now()) / 1000)));
+    tick();
+    const t = setInterval(tick, 500);
+    return () => clearInterval(t);
+  }, [schedule]);
+
+  async function sendSlot(slot) {
+    setSendError(null);
+
+    // A plain confirm rather than a styled modal. This is the one irreversible
+    // button on the screen and the number in it is the whole point — a custom
+    // dialog would be prettier and easier to click through without reading.
+    const ok = window.confirm(
+      `Send "${slot.subject}" to ${slot.projectedCount} people?\n\n`
+      + `You will have ${(schedule && schedule.config.undoSeconds) || 10} seconds to undo before anything leaves.`
+    );
+    if (!ok) return;
+
+    setSending(true);
+    try {
+      const r = await fetch('/api/keepwarm/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftId: slot.draftId }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(sendReason(d));
+      await loadSchedule();
+    } catch (err) {
+      setSendError(err.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function undoSend() {
+    const active = schedule && schedule.activeRun;
+    if (!active) return;
+    setUndoing(true);
+    try {
+      const r = await fetch('/api/keepwarm/undo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: active.id }),
+      });
+      if (!r.ok) {
+        setSendError('Too late to undo — the first emails have already gone.');
+      }
+      await loadSchedule();
+      await loadDrafts();
+    } catch (err) {
+      setSendError('Could not undo: ' + err.message);
+    } finally {
+      setUndoing(false);
+    }
+  }
+
+  async function openRunDetail(id) {
+    if (openRun === id) { setOpenRun(null); return; }
+    setOpenRun(id);
+    setRunRows(null);
+    try {
+      const r = await fetch(`/api/keepwarm/sent/${id}/recipients`);
+      const d = await r.json();
+      if (r.ok) setRunRows(d.rows || []);
+      else setRunRows([]);
+    } catch { setRunRows([]); }
+  }
 
   useEffect(() => {
     if (!showList) return;
@@ -621,9 +1038,11 @@ export default function KeepWarm() {
         <h1 style={{ fontSize: 22, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>Keep-warm emails</h1>
         <p style={{ fontSize: 14, color: MUTED, margin: '0 0 22px', lineHeight: 1.6 }}>
           A short email every fortnight to everyone who has already had Billy's introduction, so
-          Sweetbyte stays in mind while they are still deciding. Nothing is sent from this screen —
-          generate, read, edit and approve here.
+          Sweetbyte stays in mind while they are still deciding. Nothing goes out on a timer —
+          Studio lines the next one up and you press send.
         </p>
+
+        <TabBar tab={tab} onPick={setTab} />
 
         {error && <Banner tone="bad">{error}</Banner>}
 
@@ -649,6 +1068,7 @@ export default function KeepWarm() {
           <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>
         ) : (
           <>
+            {tab === 'audience' && (<>
             {/* ── Audience ─────────────────────────────────────────────── */}
             <Card>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
@@ -733,6 +1153,9 @@ export default function KeepWarm() {
               )}
             </Card>
 
+            </>)}
+
+            {tab === 'drafts' && (<>
             {/* ── Generate ─────────────────────────────────────────────── */}
             <Card>
               <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>Write some emails</h2>
@@ -795,6 +1218,33 @@ export default function KeepWarm() {
                   />
                 ))}
               </div>
+            )}
+            </>)}
+
+            {tab === 'schedule' && (<>
+              {schedule && schedule.activeRun && schedule.activeRun.status === 'queued' && (
+                <UndoBar
+                  secondsLeft={secondsLeft}
+                  count={schedule.activeRun.recipientCount}
+                  onUndo={undoSend}
+                  undoing={undoing}
+                />
+              )}
+              <ScheduleView
+                data={schedule}
+                onSend={sendSlot}
+                sending={sending}
+                sendError={sendError}
+              />
+            </>)}
+
+            {tab === 'sent' && (
+              <SentView
+                runs={sentList}
+                openId={openRun}
+                onOpen={openRunDetail}
+                recipients={runRows}
+              />
             )}
           </>
         )}
