@@ -130,6 +130,7 @@ db.exec(`
     contact_name        TEXT,
     email               TEXT NOT NULL,
     stage               TEXT,
+    greeting            TEXT,
     status              TEXT NOT NULL DEFAULT 'queued',
     message_id          TEXT,
     error               TEXT,
@@ -142,6 +143,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_kw_recip_email
     ON keepwarm_recipients(email);
 `);
+
+// Added after the first runs existed. Rows queued before this fall back to
+// deriving the greeting from their stored contact name at send time, which is
+// what they would have done anyway.
+try {
+  const cols = db.prepare(`PRAGMA table_info(keepwarm_recipients)`).all().map(c => c.name);
+  if (!cols.includes('greeting')) {
+    db.exec(`ALTER TABLE keepwarm_recipients ADD COLUMN greeting TEXT`);
+    console.log('[keepwarm] added greeting column');
+  }
+} catch (err) {
+  console.error('[keepwarm] greeting migration failed:', err.message);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -285,8 +299,8 @@ export function queueRun(draftId, { only = null, exclude = null } = {}) {
   `);
   const insertRecipient = db.prepare(`
     INSERT INTO keepwarm_recipients
-      (id, run_id, external_company_id, company_name, contact_name, email, stage, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')
+      (id, run_id, external_company_id, company_name, contact_name, email, stage, greeting, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued')
   `);
 
   // One transaction: a half-written run — the header with no recipients, or
@@ -302,6 +316,10 @@ export function queueRun(draftId, { only = null, exclude = null } = {}) {
         p.contactName || null,
         normEmail(p.email),
         p.stage || null,
+        // Frozen with the row. The greeting a person got is then a fact you can
+        // read back weeks later, not something recomputed from a contact name
+        // that may have changed in WorkTrackr since.
+        p.greeting || null,
       );
     }
   });
@@ -501,7 +519,9 @@ async function sendRun(run) {
         const html = renderEmailHtml({
           bodyHtml:  run.html_body,
           unsubUrl:  unsubUrlFor(r.email),
-          firstName: firstNameOf(r.contact_name),
+          // The greeting stored when the run was frozen. Older rows have none,
+          // so they fall back to the contact name the way they always did.
+          firstName: r.greeting || firstNameOf(r.contact_name),
         });
 
         // Tracking flags are left at their defaults, which are all false. No
@@ -691,7 +711,7 @@ export function sentRuns(limit = 20) {
  */
 export function runRecipients(runId, limit = 1000) {
   return db.prepare(`
-    SELECT company_name, contact_name, email, stage, status, sent_at, error
+    SELECT company_name, contact_name, email, stage, greeting, status, sent_at, error
       FROM keepwarm_recipients
      WHERE run_id = ?
      ORDER BY company_name IS NULL, company_name ASC, email ASC

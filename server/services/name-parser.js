@@ -64,6 +64,36 @@ const ROLE_WORDS = new Set([
 const JOINT_TOKENS = new Set(['&', 'and', '+']);
 
 /**
+ * The greeting for a keep-warm email, resolved without an AI call.
+ *
+ * Order is contact name, then referrer name, then nothing.
+ *
+ * THE REFERRER FALLBACK IS A DELIBERATE OPERATOR DECISION, AND IT IS CONTESTED.
+ * `referrerName` is only ever populated when the caller chose "spoke to someone
+ * else" in WorkTrackr — which is WorkTrackr recording that this person is NOT
+ * the recipient, but a colleague who passed the address on. Greeting a shared
+ * inbox with that name addresses the email to somebody who is not reading it.
+ * Billy weighed that up on 9 September 2026 and asked for it anyway, on the
+ * grounds that in practice the person named is usually the one who asked for
+ * the email. Recorded here so the next reader knows it is a choice rather than
+ * a misunderstanding of the field. The clean fix is on the WorkTrackr side —
+ * record that person as the contact with spokeTo 'them'.
+ *
+ * Only `rule` results are accepted. `needs_ai` means the deterministic pass had
+ * a guess it wanted checked, and an unchecked guess in a greeting is exactly the
+ * failure worth avoiding: "Hi Shorders," is worse than "Hi there,". Those fall
+ * through to null until somebody decides to wire the AI pass in here.
+ */
+export function greetingFirstName(contactName, referrerName = null) {
+  for (const candidate of [contactName, referrerName]) {
+    if (!candidate) continue;
+    const r = parseFirstName(candidate);
+    if (r.source === 'rule' && r.firstName) return r.firstName;
+  }
+  return null;
+}
+
+/**
  * Stage 1 — fast deterministic parse.
  * Returns { firstName, source, reason } where source is one of:
  *   "rule"     — clean, no AI needed

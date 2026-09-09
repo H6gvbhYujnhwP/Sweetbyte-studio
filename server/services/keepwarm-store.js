@@ -48,6 +48,7 @@
 import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { isSuppressed } from './service-email-sender.js';
+import { greetingFirstName } from './name-parser.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema
@@ -374,6 +375,7 @@ function rawAudience() {
       s.external_company_id    AS external_company_id,
       s.company_name           AS sent_company_name,
       s.contact_name           AS contact_name,
+      s.referrer_name          AS referrer_name,
       k.company_name           AS live_company_name,
       k.primary_contact        AS primary_contact,
       k.stage                  AS stage
@@ -392,6 +394,13 @@ function project(row) {
   return {
     email:             row.email,
     contactName:       row.contact_name || row.primary_contact || null,
+    referrerName:      row.referrer_name || null,
+    // What the email will actually say. Resolved once, here, so the list on
+    // screen and the email that goes out can never disagree about it.
+    greeting:          greetingFirstName(
+                         row.contact_name || row.primary_contact || null,
+                         row.referrer_name || null,
+                       ),
     companyName:       row.live_company_name || row.sent_company_name || null,
     externalCompanyId: row.external_company_id || null,
     stage:             row.stage || null,

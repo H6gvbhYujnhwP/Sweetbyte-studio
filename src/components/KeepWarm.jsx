@@ -199,6 +199,7 @@ function AudienceRow({ row, selectable = false, checked = true, onToggle }) {
           {row.email}
         </div>
       </div>
+      {!row.reason && <GreetingPill greeting={row.greeting} />}
       <span style={{
         fontSize: 12, color: row.reason ? MUTED : SB.dark,
         background: row.reason ? '#eeeeec' : SB.tint,
@@ -420,6 +421,21 @@ function testReason(d) {
   }
 }
 
+// What the email will open with, shown beside every recipient so a wrong
+// greeting is caught on screen rather than in somebody's inbox.
+function GreetingPill({ greeting }) {
+  const known = Boolean(greeting);
+  return (
+    <span style={{
+      fontSize: 12, whiteSpace: 'nowrap', padding: '2px 9px', borderRadius: 999,
+      background: known ? GOOD_BG : '#eeeeec',
+      color: known ? GOOD : MUTED,
+    }}>
+      Hi {greeting || 'there'},
+    </span>
+  );
+}
+
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 //
 // Module level, like everything else here — see the SUB-COMPONENT RULE at the
@@ -578,6 +594,7 @@ function SlotList({ data, search, onSearch, isChecked, onToggle, onAll, onNone, 
                 {r.email}
               </div>
             </div>
+            <GreetingPill greeting={r.greeting} />
             <span style={{
               fontSize: 12, color: SB.dark, background: SB.tint,
               padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap',
@@ -756,6 +773,7 @@ function SentRow({ run, onOpen, open, recipients }) {
                 </div>
                 <div style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.email}</div>
               </div>
+              <GreetingPill greeting={r.greeting} />
               <span style={{
                 fontSize: 12, whiteSpace: 'nowrap', padding: '2px 9px', borderRadius: 999,
                 background: r.status === 'sent' ? GOOD_BG : r.status === 'failed' ? DANGER_BG : '#eeeeec',
