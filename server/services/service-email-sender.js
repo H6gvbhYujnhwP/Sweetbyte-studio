@@ -265,7 +265,13 @@ export function verifyUnsubToken(email, token) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function unsubUrlFor(email) {
+/**
+ * Exported so keep-warm can build the same link rather than re-deriving the
+ * token from the same secret in a second place. Two implementations of a
+ * signed opt-out is how one of them ends up rejecting links the other issued,
+ * and the person holding the rejected link is someone asking not to be emailed.
+ */
+export function unsubUrlFor(email) {
   const e = encodeURIComponent(normEmail(email));
   const t = encodeURIComponent(unsubToken(email));
   return `${publicBaseUrl()}/api/service-emails/unsubscribe?e=${e}&t=${t}`;

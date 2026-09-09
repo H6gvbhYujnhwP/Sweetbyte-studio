@@ -29,6 +29,7 @@ import { startPoller } from './services/imap-poller.js';
 import { startClassifier } from './services/classify-replies.js';
 import { startDripTicker } from './services/drip-ticker.js';
 import { startServiceEmailTicker } from './services/service-email-ticker.js';
+import { startKeepwarmTicker } from './services/keepwarm-ticker.js';
 import { selfTest as cryptoSelfTest } from './services/crypto-vault.js';
 import { backfillLogos } from './services/logo-backfill.js';
 
@@ -123,6 +124,13 @@ app.listen(PORT, () => {
   // whose in-process timeout was lost to a restart, and fires follow-ups as
   // they come due. Without this, queued rows sit forever.
   startServiceEmailTicker();
+
+  // Start the keep-warm ticker — same job for keep-warm runs: closes an undo
+  // window whose timer was lost to a restart, and resumes a run that was part
+  // way through when the process went down. A run of a thousand takes minutes,
+  // so a deploy landing mid-send is a case that has to be handled, not hoped
+  // against. Nothing here starts a send on its own — a person presses send.
+  startKeepwarmTicker();
 
   // Backfill any logos uploaded before the trim-at-upload pipeline shipped.
   // Fire-and-forget — runs in the background, logs progress, doesn't block

@@ -9,10 +9,17 @@
  * are separate today: one router with two auth models is how a bridge endpoint
  * quietly becomes reachable from a browser session.
  *
- * PHASE 1 SCOPE. Everything here is audience, settings, generation and review.
- * Choosing recipients and actually sending are Phase 2, and there is
- * deliberately no route that could mail anybody yet — an unfinished send path
- * sitting behind a button is exactly the accident worth designing out.
+ * PHASE 2. Sending now exists, and the routes that reach it are the last five
+ * in this file. The shape Phase 1 warned about — an unfinished send path behind
+ * a button — is avoided differently now that the path is finished: pressing
+ * send queues a run dated a few seconds ahead and sends nothing, so the undo
+ * window is a real window rather than a recall. Everything downstream of that
+ * lives in services/keepwarm-sender.js.
+ *
+ * Sending is deliberately NOT on a timer. Studio works out when a fortnight is
+ * up and shows the operator what would go; a person presses the button. A cron
+ * mailing four figures of real prospects with nobody watching was considered
+ * and rejected.
  */
 
 import { Router } from 'express';
@@ -45,6 +52,15 @@ import {
   ragLoaded,
   ALLOWED_COUNTS,
 } from '../services/keepwarm-generator.js';
+import {
+  queueRun,
+  cancelRun,
+  schedule,
+  sentRuns,
+  runRecipients,
+  activeRun,
+  cadenceConfig,
+} from '../services/keepwarm-sender.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -353,6 +369,126 @@ router.post('/drafts/:id/status', (req, res) => {
     res.json({ draft: result });
   } catch (err) {
     console.error('[keepwarm] set draft status failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Schedule and sending
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /schedule
+ * The Schedule tab: the run in flight if there is one, the next due date, and
+ * the approved drafts queued behind it with a projected date and headcount.
+ */
+router.get('/schedule', (req, res) => {
+  try {
+    res.json(schedule(Number(req.query.limit) || 10));
+  } catch (err) {
+    console.error('[keepwarm] schedule failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /send  { draftId }
+ *
+ * Queues a run. Nothing is sent by this call — the run is dated a few seconds
+ * ahead, and /undo cancels it outright during that window because there is
+ * genuinely nothing out there yet.
+ *
+ * A 409 means the request was understood and deliberately not actioned. Each
+ * reason is something the operator has to read and decide about:
+ *   not_configured  — no from-address set, so it refuses rather than guessing
+ *   not_approved    — the draft has not been ticked off
+ *   already_sent    — this draft has gone before
+ *   run_in_progress — one send at a time
+ *   empty_audience  — nobody qualifies under the current stage rule
+ *   over_cap        — more recipients than the safety cap allows
+ */
+router.post('/send', (req, res) => {
+  try {
+    const draftId = String((req.body || {}).draftId || '');
+    if (!draftId) return res.status(400).json({ error: 'draftId required' });
+
+    const result = queueRun(draftId);
+    if (!result.ok) {
+      const code = result.reason === 'no_draft' ? 404 : 409;
+      return res.status(code).json({
+        error: result.reason,
+        count: result.count,
+        cap:   result.cap,
+        runId: result.runId,
+      });
+    }
+
+    console.log(`[keepwarm] operator queued run ${result.runId} for draft ${draftId}`);
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] send failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /undo  { runId }
+ * Only works while the run is still queued. Once the worker has claimed it the
+ * first messages are with SES, and a 409 says so plainly rather than pretending
+ * the send was stopped.
+ */
+router.post('/undo', (req, res) => {
+  try {
+    const runId = String((req.body || {}).runId || '');
+    if (!runId) return res.status(400).json({ error: 'runId required' });
+
+    const result = cancelRun(runId);
+    if (!result.ok) return res.status(409).json({ error: result.reason });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[keepwarm] undo failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /active
+ * Small and cheap, for polling while a send is running so the screen can show
+ * progress without re-reading the whole schedule.
+ */
+router.get('/active', (req, res) => {
+  try {
+    const run = activeRun();
+    res.json({ run: run ? { id: run.id, status: run.status, sendAfter: run.send_after } : null, config: cadenceConfig() });
+  } catch (err) {
+    console.error('[keepwarm] active failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /sent
+ * The Sent tab: past runs with what went, what failed, and how many people
+ * opted out afterwards.
+ */
+router.get('/sent', (req, res) => {
+  try {
+    res.json({ runs: sentRuns(Number(req.query.limit) || 20) });
+  } catch (err) {
+    console.error('[keepwarm] sent list failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /sent/:runId/recipients
+ * Who one past send actually went to — the frozen list, not a recount.
+ */
+router.get('/sent/:runId/recipients', (req, res) => {
+  try {
+    res.json({ rows: runRecipients(req.params.runId, Number(req.query.limit) || 1000) });
+  } catch (err) {
+    console.error('[keepwarm] recipients failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
