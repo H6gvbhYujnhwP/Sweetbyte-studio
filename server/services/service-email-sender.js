@@ -40,6 +40,7 @@ import {
   renderServiceEmail,
   buildSubject,
   normaliseServiceKeys,
+  normaliseSpokeTo,
   FOLLOWUP_READY,
 } from './service-email-templates.js';
 
@@ -183,6 +184,7 @@ db.exec(`
     error               TEXT,
     parent_id           TEXT,
     referrer_name       TEXT,
+    spoke_to            TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -200,18 +202,24 @@ db.exec(`
   );
 `);
 
-// Migration for databases created before referrer_name existed. CREATE TABLE
+// Migrations for databases created before these columns existed. CREATE TABLE
 // IF NOT EXISTS does nothing to an existing table, so a new column has to be
 // added explicitly. Wrapped because ALTER throws if the column is already
 // there and there is no IF NOT EXISTS for columns in SQLite.
+//
+// Existing rows get NULL for spoke_to, which is exactly right: normaliseSpokeTo
+// falls back to the old referrer-name inference for those, so anything queued
+// before this change renders the way it always would have.
 try {
-  const cols = db.prepare(`PRAGMA table_info(service_email_sends)`).all();
-  if (!cols.some(c => c.name === 'referrer_name')) {
-    db.exec(`ALTER TABLE service_email_sends ADD COLUMN referrer_name TEXT`);
-    console.log('[service-email] added referrer_name column');
+  const cols = db.prepare(`PRAGMA table_info(service_email_sends)`).all().map(c => c.name);
+  for (const col of ['referrer_name', 'spoke_to']) {
+    if (!cols.includes(col)) {
+      db.exec(`ALTER TABLE service_email_sends ADD COLUMN ${col} TEXT`);
+      console.log(`[service-email] added ${col} column`);
+    }
   }
 } catch (err) {
-  console.error('[service-email] referrer_name migration failed:', err.message);
+  console.error('[service-email] column migration failed:', err.message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,6 +435,7 @@ export function queueServiceEmail({
   companyName,
   contactName,
   referrerName,
+  spokeTo,
   toEmail,
   services,
 }) {
@@ -451,14 +460,19 @@ export function queueServiceEmail({
   db.prepare(`
     INSERT INTO service_email_sends
       (id, external_company_id, company_name, contact_name, referrer_name,
-       to_email, services_json, step, status, send_after)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'queued', ?)
+       spoke_to, to_email, services_json, step, status, send_after)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'queued', ?)
   `).run(
     id,
     String(externalCompanyId),
     companyName || null,
     contactName || null,
     (referrerName && String(referrerName).trim()) || null,
+    // Normalised here rather than at render time so the stored row says which
+    // email was actually sent. Reading the row back is how a "why did it say
+    // that?" question gets answered weeks later, and a raw value that fell
+    // through to a fallback would answer it wrongly.
+    normaliseSpokeTo(spokeTo, referrerName),
     email,
     JSON.stringify(fresh),
     sendAfter,
@@ -570,6 +584,7 @@ export async function processDue() {
         companyName: row.company_name,
         contactName: row.contact_name,
         referrerName: row.referrer_name,
+        spokeTo: row.spoke_to,
         senderName: SENDER_NAME,
         unsubUrl: unsubUrlFor(row.to_email),
       });
@@ -632,16 +647,21 @@ function scheduleFollowup(parentRow, services) {
   ).get(parentRow.id);
   if (existing) return;
 
+  // referrer_name and spoke_to are carried across. Without them the follow-up
+  // would fall back to 'them' and reintroduce the "we spoke" claim seven days
+  // after the first email carefully avoided it.
   db.prepare(`
     INSERT INTO service_email_sends
-      (id, external_company_id, company_name, contact_name, to_email,
-       services_json, step, status, send_after, parent_id)
-    VALUES (?, ?, ?, ?, ?, ?, 2, 'queued', ?, ?)
+      (id, external_company_id, company_name, contact_name, referrer_name,
+       spoke_to, to_email, services_json, step, status, send_after, parent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2, 'queued', ?, ?)
   `).run(
     uuid(),
     parentRow.external_company_id,
     parentRow.company_name,
     parentRow.contact_name,
+    parentRow.referrer_name || null,
+    parentRow.spoke_to || null,
     parentRow.to_email,
     JSON.stringify(services),
     isoPlusSeconds(FOLLOWUP_DAYS * 24 * 60 * 60),

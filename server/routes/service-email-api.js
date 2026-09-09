@@ -107,17 +107,26 @@ router.get('/catalogue', requireBridgeAuth, (req, res) => {
 
 /**
  * POST /api/service-emails/send
- * Body: { externalCompanyId, companyName, contactName, toEmail, services: [key] }
+ * Body: { externalCompanyId, companyName, contactName, spokeTo, referrerName,
+ *         toEmail, services: [key] }
+ *
+ * `spokeTo` is 'them' | 'someone_else' | 'nobody' and decides the email's
+ * opening. It is optional on the wire: an older WorkTrackr omits it, and the
+ * sender falls back to the previous referrer-name inference for those.
  *
  * Queues rather than sends: the row sits for the undo window first. A 409 means
  * the request was understood and deliberately not actioned — every one of those
  * reasons is something the sender needs to see, not a failure to retry.
  */
 router.post('/send', requireBridgeAuth, (req, res) => {
-  const { externalCompanyId, companyName, contactName, referrerName, toEmail, services } = req.body || {};
+  const {
+    externalCompanyId, companyName, contactName,
+    referrerName, spokeTo, toEmail, services,
+  } = req.body || {};
 
   const result = queueServiceEmail({
-    externalCompanyId, companyName, contactName, referrerName, toEmail, services,
+    externalCompanyId, companyName, contactName,
+    referrerName, spokeTo, toEmail, services,
   });
 
   if (!result.ok) {

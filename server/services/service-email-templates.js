@@ -25,6 +25,39 @@ export const SERVICES = [
 
 const BY_KEY = new Map(SERVICES.map(s => [s.key, s]));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Who the caller actually spoke to
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Sent by WorkTrackr as `spokeTo`, chosen from a dropdown by the person who
+// made the call. It decides the opening, the closing and the footer.
+//
+//   them          the recipient themselves — the ordinary after-a-call email
+//   someone_else  a colleague at the same company, named or not
+//   nobody        no conversation happened at all
+//
+// This replaces an inference that read a blank referrer name as "I spoke to
+// the recipient". That was wrong in the most common case of all: a switchboard
+// hands over a name and an address without giving you their own name. An email
+// then went to a prospect thanking her for a call that never happened, and she
+// said so in her reply.
+export const SPOKE_TO_VALUES = ['them', 'someone_else', 'nobody'];
+
+/**
+ * Resolve the mode for a row.
+ *
+ * Falls back to the old inference ONLY when `spokeTo` is absent, which now
+ * means one of two things: a WorkTrackr instance that predates the dropdown,
+ * or a row queued before this column existed. Both are cases where a guess is
+ * genuinely the best available answer; a present-but-unrecognised value is not,
+ * so it is treated as absent rather than trusted.
+ */
+export function normaliseSpokeTo(spokeTo, referrerName) {
+  const v = String(spokeTo || '').trim();
+  if (SPOKE_TO_VALUES.includes(v)) return v;
+  return String(referrerName || '').trim() ? 'someone_else' : 'them';
+}
+
 /**
  * Follow-up copy has not been written yet. While this is false the sender will
  * not schedule a step-2 row at all, so there is no way for an empty follow-up
@@ -70,6 +103,22 @@ const OPENING_REFERRAL = `
   email address.</p>
 `;
 
+// Same situation as OPENING_REFERRAL, but the caller never got the name of the
+// person who passed the address on. This is the ordinary switchboard case —
+// "email Shelly, her address is…" — and it is the one the old blank-referrer
+// inference got wrong, because a missing name was read as "I spoke to the
+// recipient". Nothing here claims a conversation with the person reading it.
+const OPENING_PASSED_ON = `
+  <p style="${P_STYLE}">Hi [NAME], I spoke to one of your colleagues earlier who kindly passed on
+  your email address.</p>
+`;
+
+// No call at all. Nothing to thank anyone for and nobody to refer back to, so
+// this opens as what it is.
+const OPENING_COLD = `
+  <p style="${P_STYLE}">Hi [NAME], I hope you don't mind me getting in touch out of the blue.</p>
+`;
+
 // Everything between the opening and the sign-off is identical either way.
 const BODY_MIDDLE = `
   <p style="${P_STYLE}">Just to give you a little background on us. We're a local IT company based
@@ -99,7 +148,10 @@ const BODY_MIDDLE = `
 `;
 
 // "another call" and "Thanks again" only make sense to someone who has already
-// spoken to us — hence a separate closing for referrals.
+// spoken to us — hence a separate closing for every case where they have not.
+// CLOSING_REFERRAL is used for all three of those: named colleague, unnamed
+// colleague, and no conversation at all. It says nothing about a referrer, so
+// it needs no variants of its own.
 const CLOSING_CALL = `
   <p style="${P_STYLE}">There's absolutely no pressure from our side. I'd be happy to give you
   another call next week when hopefully the timing is a little better, or if you
@@ -289,31 +341,45 @@ export function renderServiceEmail({
   companyName,
   contactName,
   referrerName,
+  spokeTo,
   senderName,
   unsubUrl,
 }) {
   const vars = buildVars({ companyName, contactName, referrerName, senderName });
 
-  // A referrer means the recipient has NOT spoken to us. Four separate phrases
-  // in the standard copy assume they have — "thanks for taking my call", "an
-  // unexpected IT call", "another call next week" and "Thanks again" — so this
-  // swaps the opening and the closing wholesale rather than patching one line.
-  const isReferral = Boolean(String(referrerName || '').trim());
+  // Four separate phrases in the standard copy assume the reader has spoken to
+  // us — "thanks for taking my call", "an unexpected IT call", "another call
+  // next week" and "Thanks again" — so the opening and the closing are swapped
+  // wholesale rather than patched a line at a time.
+  const mode = normaliseSpokeTo(spokeTo, referrerName);
+  const hasReferrerName = Boolean(String(referrerName || '').trim());
+
+  const opening =
+    mode === 'them' ? OPENING_CALL
+      : mode === 'someone_else' ? (hasReferrerName ? OPENING_REFERRAL : OPENING_PASSED_ON)
+        : OPENING_COLD;
+
+  const closing = mode === 'them' ? CLOSING_CALL : CLOSING_REFERRAL;
 
   const body = (step === 2)
     ? applyTokens(FOLLOWUP_BODY, vars)
-    : applyTokens(
-        (isReferral ? OPENING_REFERRAL : OPENING_CALL)
-        + BODY_MIDDLE
-        + (isReferral ? CLOSING_REFERRAL : CLOSING_CALL),
-        vars,
-      );
+    : applyTokens(opening + BODY_MIDDLE + closing, vars);
+
+  // The footer has to agree with the opening. "Because we spoke about your
+  // requirements" contradicts an email that has just said we have never
+  // spoken, and it is the line a recipient reads when they are deciding
+  // whether being emailed was reasonable.
+  const reason =
+    mode === 'them'
+      ? "You're receiving this because we spoke about your requirements."
+      : mode === 'someone_else'
+        ? "You're receiving this because your details were passed on to us when we called."
+        : "You're receiving this because we think Sweetbyte may be able to help your business.";
 
   const footer = `
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0 12px;">
     <p style="font-size:12px;color:#6b7280;margin:0;">
-      You're receiving this because we spoke about your requirements. If you'd
-      rather not hear from us again,
+      ${reason} If you'd rather not hear from us again,
       <a href="${escapeHtml(unsubUrl)}" style="color:#6b7280;">unsubscribe here</a>
       and we'll stop contacting you.
     </p>

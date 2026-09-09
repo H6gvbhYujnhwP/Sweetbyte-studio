@@ -243,9 +243,35 @@ approved body, adds a heading to each, and replaces only the connective wording
 ```json
 { "externalCompanyId": "<WorkTrackr contacts.id>",
   "companyName": "Acme Ltd", "contactName": "Dave Smith",
+  "spokeTo": "someone_else", "referrerName": "Karen",
   "toEmail": "dave@acme.co.uk", "services": ["it_support","voip_telephony"] }
 ```
 → `200 { id, services, skipped, sendAfter }`
+
+**`spokeTo`** decides the email's opening, closing and unsubscribe reason. It is
+chosen from a dropdown by whoever made the call and is one of exactly three
+values:
+
+| value | meaning | `referrerName` |
+|---|---|---|
+| `them` | Spoke to the person receiving the email. | always `null` |
+| `someone_else` | Spoke to a colleague at the same company, who gave us this address. | the colleague's name, or `null` if it was never given |
+| `nobody` | No conversation happened at all. | always `null` |
+
+`someone_else` with no name is a real and common case — a switchboard hands over
+a name and an address without giving its own — and it has its own opening
+("I spoke to one of your colleagues earlier"). It is not an error.
+
+The field is optional on the wire. A WorkTrackr instance that predates the
+dropdown omits it, and Studio falls back to the rule that preceded it: a
+`referrerName` means `someone_else`, no `referrerName` means `them`. That
+inference is exactly what `spokeTo` exists to replace — it read a missing
+colleague's name as "I spoke to the recipient", and sent a prospect an email
+thanking her for a call that never happened — so it applies only when there is
+no `spokeTo` to use. An unrecognised value is treated as absent, never trusted.
+
+WorkTrackr guarantees `referrerName` is `null` unless `spokeTo` is
+`someone_else`, so Studio does not cross-check the two.
 
 Queues rather than sends — the row waits out the 10-second undo window. `services`
 is what will actually go out; `skipped` is anything dropped as already sent.
