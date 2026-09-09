@@ -457,7 +457,7 @@ function UndoBar({ secondsLeft, count, onUndo, undoing }) {
 
 // ── Schedule ─────────────────────────────────────────────────────────────────
 
-function SlotRow({ slot, canSend, onSend, sending }) {
+function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -473,9 +473,29 @@ function SlotRow({ slot, canSend, onSend, sending }) {
         fontSize: 12, background: GOOD_BG, color: GOOD,
         padding: '3px 10px', borderRadius: 999, whiteSpace: 'nowrap',
       }}>Approved</span>
-      <div style={{ width: 92, textAlign: 'right', fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
-        {slot.projectedCount} people
-      </div>
+
+      {/* The headcount is the control on the sendable row — clicking the number
+          you are about to commit to is where you would reach to check it.
+          Later rows show the same number as plain text: their real audience is
+          a fortnight away and genuinely unknowable, so offering a list there
+          would be showing today's names as though they were next time's. */}
+      {canSend ? (
+        <button
+          onClick={onToggle}
+          style={{
+            width: 108, textAlign: 'right', fontSize: 13, color: SB.dark,
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+          }}
+        >
+          {slot.projectedCount} people {expanded ? '▴' : '▾'}
+        </button>
+      ) : (
+        <div style={{ width: 108, textAlign: 'right', fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
+          {slot.projectedCount} people
+        </div>
+      )}
+
       <div style={{ width: 96, textAlign: 'right' }}>
         {canSend
           ? <Button tone="primary" disabled={sending} onClick={() => onSend(slot)}>
@@ -487,7 +507,63 @@ function SlotRow({ slot, canSend, onSend, sending }) {
   );
 }
 
-function ScheduleView({ data, onSend, sending, sendError }) {
+// The people the next send would go to, read live rather than stored — this is
+// the same audience endpoint the Audience tab uses, so the two can never drift
+// into disagreeing about who is on the list.
+function SlotList({ data, search, onSearch }) {
+  return (
+    <div style={{ background: BG, borderBottom: `1px solid ${BORDER}` }}>
+      <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Search name, company or address"
+          style={{
+            flex: 1, minWidth: 220, padding: '7px 11px', fontSize: 13,
+            border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', background: CARD,
+          }}
+        />
+        <span style={{ fontSize: 12, color: TERTIARY }}>
+          {data ? `${data.total} shown of ${data.includedCount}` : 'Loading…'}
+        </span>
+      </div>
+
+      <div style={{ maxHeight: 320, overflowY: 'auto', borderTop: `1px solid ${BORDER}` }}>
+        {!data && <div style={{ padding: '12px 14px', fontSize: 13, color: MUTED }}>Loading…</div>}
+        {data && data.rows.length === 0 && (
+          <div style={{ padding: '12px 14px', fontSize: 13, color: MUTED }}>Nobody matches that search.</div>
+        )}
+        {data && data.rows.map((r, i) => (
+          <div key={i} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '7px 14px', borderBottom: `1px solid ${BORDER}`,
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {r.contactName ? `${r.contactName} — ` : ''}{r.companyName || 'Unknown company'}
+              </div>
+              <div style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {r.email}
+              </div>
+            </div>
+            <span style={{
+              fontSize: 12, color: SB.dark, background: SB.tint,
+              padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap',
+            }}>{r.stageLabel}</span>
+          </div>
+        ))}
+      </div>
+
+      {data && data.truncated && (
+        <div style={{ padding: '9px 14px', fontSize: 12, color: TERTIARY }}>
+          Only the first 1,000 are listed. Search to narrow it down — the send still goes to all {data.includedCount}.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch }) {
   if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const active = data.activeRun;
@@ -526,19 +602,28 @@ function ScheduleView({ data, onSend, sending, sendError }) {
         </div></Card>
       ) : (
         <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
-          {data.slots.map((s, i) => (
-            <SlotRow
-              key={s.draftId}
-              slot={s}
-              // Only the top slot is sendable, and only when nothing else is in
-              // flight. One send at a time — two overlapping runs would land two
-              // emails on the same person within minutes, which reads as a fault
-              // whatever the copy says.
-              canSend={i === 0 && !active}
-              onSend={onSend}
-              sending={sending}
-            />
-          ))}
+          {data.slots.map((s, i) => {
+            const sendable = i === 0 && !active;
+            return (
+              <div key={s.draftId}>
+                <SlotRow
+                  slot={s}
+                  // Only the top slot is sendable, and only when nothing else is
+                  // in flight. One send at a time — two overlapping runs would
+                  // land two emails on the same person within minutes, which
+                  // reads as a fault whatever the copy says.
+                  canSend={sendable}
+                  onSend={onSend}
+                  sending={sending}
+                  expanded={sendable && listOpen}
+                  onToggle={onToggleList}
+                />
+                {sendable && listOpen && (
+                  <SlotList data={listData} search={listSearch} onSearch={onListSearch} />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -705,6 +790,13 @@ export default function KeepWarm() {
   const [openRun, setOpenRun]       = useState(null);
   const [runRows, setRunRows]       = useState(null);
 
+  // The "39 people" drop-down on the sendable row. Kept separate from the
+  // Audience tab's own list state so opening one does not disturb the search
+  // you had typed on the other.
+  const [listOpen, setListOpen]     = useState(false);
+  const [listData, setListData]     = useState(null);
+  const [listSearch, setListSearch] = useState('');
+
   const loadOverview = useCallback(async () => {
     try {
       const r = await fetch('/api/keepwarm/overview');
@@ -783,6 +875,28 @@ export default function KeepWarm() {
     tick();
     const t = setInterval(tick, 500);
     return () => clearInterval(t);
+  }, [schedule]);
+
+  // Same debounce as the Audience tab's search — 250ms, so typing a company
+  // name is one request at the end rather than one per keystroke.
+  useEffect(() => {
+    if (!listOpen) return;
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/keepwarm/audience?show=included&q=${encodeURIComponent(listSearch || '')}`);
+        const d = await r.json();
+        if (r.ok) setListData(d);
+      } catch { /* leave what is on screen */ }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [listOpen, listSearch]);
+
+  // Collapse the drop-down once a send is under way. The list it was showing
+  // was a projection; the moment you press send the real list is frozen, and
+  // leaving the projection open beside a running send invites reading it as
+  // the thing that actually went.
+  useEffect(() => {
+    if (schedule && schedule.activeRun) setListOpen(false);
   }, [schedule]);
 
   async function sendSlot(slot) {
@@ -1235,6 +1349,11 @@ export default function KeepWarm() {
                 onSend={sendSlot}
                 sending={sending}
                 sendError={sendError}
+                listOpen={listOpen}
+                onToggleList={() => setListOpen(v => !v)}
+                listData={listData}
+                listSearch={listSearch}
+                onListSearch={setListSearch}
               />
             </>)}
 
