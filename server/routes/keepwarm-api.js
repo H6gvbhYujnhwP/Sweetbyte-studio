@@ -54,6 +54,7 @@ import {
 } from '../services/keepwarm-generator.js';
 import {
   queueRun,
+  sendTest,
   cancelRun,
   schedule,
   sentRuns,
@@ -412,7 +413,15 @@ router.post('/send', (req, res) => {
     const draftId = String((req.body || {}).draftId || '');
     if (!draftId) return res.status(400).json({ error: 'draftId required' });
 
-    const result = queueRun(draftId);
+    // The ticks arrive as whichever list is shorter: `only` when the operator
+    // deselected everyone and ticked a few, `exclude` when they left the list
+    // alone and unticked a few. Neither means everybody in the loop, which is
+    // the ordinary case.
+    const body = req.body || {};
+    const only    = Array.isArray(body.only) ? body.only : null;
+    const exclude = Array.isArray(body.exclude) ? body.exclude : null;
+
+    const result = queueRun(draftId, { only, exclude });
     if (!result.ok) {
       const code = result.reason === 'no_draft' ? 404 : 409;
       return res.status(code).json({
@@ -427,6 +436,32 @@ router.post('/send', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[keepwarm] send failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /test  { draftId, toEmail }
+ *
+ * One copy, to one address, now. Not a run: nothing is recorded against the
+ * draft or the schedule, so testing cannot quietly consume the email you were
+ * about to send to everybody. The subject is prefixed [TEST] so the copy in
+ * your inbox can never be mistaken for the real one later.
+ */
+router.post('/test', async (req, res) => {
+  try {
+    const { draftId, toEmail } = req.body || {};
+    if (!draftId) return res.status(400).json({ error: 'draftId required' });
+
+    const result = await sendTest({ draftId, toEmail });
+    if (!result.ok) {
+      const code = result.reason === 'no_draft' ? 404
+        : result.reason === 'send_failed' ? 500 : 409;
+      return res.status(code).json({ error: result.reason, detail: result.detail });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[keepwarm] test send failed:', err);
     res.status(500).json({ error: err.message });
   }
 });

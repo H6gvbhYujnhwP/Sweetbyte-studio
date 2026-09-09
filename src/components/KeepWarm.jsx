@@ -173,13 +173,25 @@ function StageChip({ stage, onToggle }) {
   );
 }
 
-function AudienceRow({ row }) {
+// `selectable` is only ever true for the in-the-loop list. The excluded list
+// has nothing to tick — those people are already out, and a tickbox beside
+// somebody who has unsubscribed would suggest you could tick them back in.
+function AudienceRow({ row, selectable = false, checked = true, onToggle }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '9px 12px', borderBottom: `1px solid ${BORDER}`,
     }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      {selectable && (
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => onToggle(row.email)}
+          aria-label={`Include ${row.email}`}
+          style={{ width: 15, height: 15, cursor: 'pointer', accentColor: SB.primary, flexShrink: 0 }}
+        />
+      )}
+      <div style={{ flex: 1, minWidth: 0, opacity: selectable && !checked ? 0.45 : 1 }}>
         <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {row.contactName ? `${row.contactName} — ` : ''}{row.companyName || 'Unknown company'}
         </div>
@@ -397,6 +409,17 @@ function sendReason(d) {
   }
 }
 
+function testReason(d) {
+  switch (d && d.error) {
+    case 'bad_email':      return 'That does not look like an email address.';
+    case 'not_configured': return 'No from-address is set on Render, so nothing could be sent.';
+    case 'no_draft':       return 'That draft no longer exists.';
+    case 'suppressed':     return 'That address has unsubscribed, so Studio will not email it — not even a test.';
+    case 'send_failed':    return 'SES refused it: ' + (d.detail || 'no reason given');
+    default:               return (d && d.error) || 'Could not send the test.';
+  }
+}
+
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 //
 // Module level, like everything else here — see the SUB-COMPONENT RULE at the
@@ -510,7 +533,7 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle }) {
 // The people the next send would go to, read live rather than stored — this is
 // the same audience endpoint the Audience tab uses, so the two can never drift
 // into disagreeing about who is on the list.
-function SlotList({ data, search, onSearch }) {
+function SlotList({ data, search, onSearch, isChecked, onToggle, onAll, onNone, selectedCount }) {
   return (
     <div style={{ background: BG, borderBottom: `1px solid ${BORDER}` }}>
       <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -519,12 +542,14 @@ function SlotList({ data, search, onSearch }) {
           onChange={(e) => onSearch(e.target.value)}
           placeholder="Search name, company or address"
           style={{
-            flex: 1, minWidth: 220, padding: '7px 11px', fontSize: 13,
+            flex: 1, minWidth: 200, padding: '7px 11px', fontSize: 13,
             border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', background: CARD,
           }}
         />
+        <Button onClick={onAll}>Select all</Button>
+        <Button onClick={onNone}>Deselect all</Button>
         <span style={{ fontSize: 12, color: TERTIARY }}>
-          {data ? `${data.total} shown of ${data.includedCount}` : 'Loading…'}
+          {data ? `${selectedCount} ticked · ${data.total} shown of ${data.includedCount}` : 'Loading…'}
         </span>
       </div>
 
@@ -538,7 +563,14 @@ function SlotList({ data, search, onSearch }) {
             display: 'flex', alignItems: 'center', gap: 10,
             padding: '7px 14px', borderBottom: `1px solid ${BORDER}`,
           }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <input
+              type="checkbox"
+              checked={isChecked(r.email)}
+              onChange={() => onToggle(r.email)}
+              aria-label={`Include ${r.email}`}
+              style={{ width: 15, height: 15, cursor: 'pointer', accentColor: SB.primary, flexShrink: 0 }}
+            />
+            <div style={{ flex: 1, minWidth: 0, opacity: isChecked(r.email) ? 1 : 0.45 }}>
               <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {r.contactName ? `${r.contactName} — ` : ''}{r.companyName || 'Unknown company'}
               </div>
@@ -563,7 +595,9 @@ function SlotList({ data, search, onSearch }) {
   );
 }
 
-function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch }) {
+function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch,
+                       isChecked, onToggleOne, onAll, onNone, selectedCount, handPicked,
+                       testTo, onTestTo, onTest, testBusy, testNote, testError }) {
   if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const active = data.activeRun;
@@ -596,6 +630,13 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
         </div>
       </Card>
 
+      {handPicked && (
+        <Banner tone="warn">
+          You have hand-picked {selectedCount} of {data.audienceCount} for the next send.
+          Everyone else stays in the loop for future ones. The ticks clear as soon as this send goes.
+        </Banner>
+      )}
+
       {data.slots.length === 0 ? (
         <Card><div style={{ fontSize: 14, color: MUTED }}>
           Nothing approved yet. Approve a draft on the Drafts tab and it will line up here.
@@ -619,12 +660,50 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
                   onToggle={onToggleList}
                 />
                 {sendable && listOpen && (
-                  <SlotList data={listData} search={listSearch} onSearch={onListSearch} />
+                  <SlotList
+                    data={listData}
+                    search={listSearch}
+                    onSearch={onListSearch}
+                    isChecked={isChecked}
+                    onToggle={onToggleOne}
+                    onAll={onAll}
+                    onNone={onNone}
+                    selectedCount={selectedCount}
+                  />
                 )}
               </div>
             );
           })}
         </div>
+      )}
+
+      {data.slots.length > 0 && !active && (
+        <Card>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>Send yourself a test</h2>
+          <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
+            One copy of <strong>{data.slots[0].subject}</strong> to any address, exactly as it would go out.
+            It does not use the draft up — the real send still goes to everybody afterwards.
+            The subject arrives prefixed [TEST] so you cannot mix it up later.
+          </p>
+
+          {testError && <Banner tone="bad">{testError}</Banner>}
+          {testNote && <Banner tone="good">{testNote}</Banner>}
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              value={testTo}
+              onChange={(e) => onTestTo(e.target.value)}
+              placeholder="you@sweetbyte.co.uk"
+              style={{
+                minWidth: 260, padding: '7px 11px', fontSize: 13,
+                border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', background: CARD,
+              }}
+            />
+            <Button tone="primary" disabled={testBusy || !testTo.trim()} onClick={() => onTest(data.slots[0].draftId)}>
+              {testBusy ? 'Sending…' : 'Send a test'}
+            </Button>
+          </div>
+        </Card>
       )}
 
       <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.6, paddingBottom: 40 }}>
@@ -797,6 +876,53 @@ export default function KeepWarm() {
   const [listData, setListData]     = useState(null);
   const [listSearch, setListSearch] = useState('');
 
+  // Who the next send goes to.
+  //
+  // ONE selection, edited from two screens — the Audience tab and the Schedule
+  // drop-down are two windows onto the same ticks, not two independent lists.
+  // Two lists would eventually disagree about who is getting an email, and the
+  // one that lost would lose silently.
+  //
+  // Held as a base plus exceptions rather than a list of the ticked, because a
+  // search filters the rows on screen: "deselect all" while a search is active
+  // must mean everybody, not just the six currently visible.
+  const [selBase, setSelBase] = useState('all');       // 'all' | 'none'
+  const [selExcept, setSelExcept] = useState(() => new Set());
+
+  const isChecked = useCallback(
+    (email) => {
+      const e = String(email || '').toLowerCase();
+      return selBase === 'all' ? !selExcept.has(e) : selExcept.has(e);
+    },
+    [selBase, selExcept],
+  );
+
+  const toggleOne = useCallback((email) => {
+    const e = String(email || '').toLowerCase();
+    setSelExcept(prev => {
+      const next = new Set(prev);
+      if (next.has(e)) next.delete(e); else next.add(e);
+      return next;
+    });
+  }, []);
+
+  const selectAll  = useCallback(() => { setSelBase('all');  setSelExcept(new Set()); }, []);
+  const selectNone = useCallback(() => { setSelBase('none'); setSelExcept(new Set()); }, []);
+
+  // Exact, not an estimate: exceptions only ever hold addresses that were in
+  // the loop when they were ticked.
+  const audienceTotal = (overview && overview.audienceCount) || 0;
+  const selectedCount = selBase === 'all'
+    ? Math.max(0, audienceTotal - selExcept.size)
+    : selExcept.size;
+  const handPicked = selBase === 'none' || selExcept.size > 0;
+
+  // Test sends
+  const [testTo, setTestTo]       = useState('');
+  const [testBusy, setTestBusy]   = useState(false);
+  const [testNote, setTestNote]   = useState(null);
+  const [testError, setTestError] = useState(null);
+
   const loadOverview = useCallback(async () => {
     try {
       const r = await fetch('/api/keepwarm/overview');
@@ -905,26 +1031,57 @@ export default function KeepWarm() {
     // A plain confirm rather than a styled modal. This is the one irreversible
     // button on the screen and the number in it is the whole point — a custom
     // dialog would be prettier and easier to click through without reading.
+    const going = handPicked ? selectedCount : slot.projectedCount;
     const ok = window.confirm(
-      `Send "${slot.subject}" to ${slot.projectedCount} people?\n\n`
-      + `You will have ${(schedule && schedule.config.undoSeconds) || 10} seconds to undo before anything leaves.`
+      `Send "${slot.subject}" to ${going} ${going === 1 ? 'person' : 'people'}?`
+      + (handPicked ? `\n\nYou have hand-picked these — the other ${Math.max(0, slot.projectedCount - going)} in the loop will not get it.` : '')
+      + `\n\nYou will have ${(schedule && schedule.config.undoSeconds) || 10} seconds to undo before anything leaves.`
     );
     if (!ok) return;
 
     setSending(true);
     try {
+      // Send whichever tick list is the shorter and truer description of what
+      // was asked for, and let the server resolve it against the live audience.
+      const payload = { draftId: slot.draftId };
+      if (selBase === 'none') payload.only = Array.from(selExcept);
+      else if (selExcept.size) payload.exclude = Array.from(selExcept);
+
       const r = await fetch('/api/keepwarm/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draftId: slot.draftId }),
+        body: JSON.stringify(payload),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(sendReason(d));
+      // The ticks were for this send only, so they go once it is queued. Left
+      // in place they would silently narrow the next fortnight's send too.
+      selectAll();
       await loadSchedule();
     } catch (err) {
       setSendError(err.message);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function sendTestEmail(draftId) {
+    setTestError(null);
+    setTestNote(null);
+    setTestBusy(true);
+    try {
+      const r = await fetch('/api/keepwarm/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftId, toEmail: testTo }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(testReason(d));
+      setTestNote(`Test sent to ${testTo}. The draft is untouched and still due to go to everyone.`);
+    } catch (err) {
+      setTestError(err.message);
+    } finally {
+      setTestBusy(false);
     }
   }
 
@@ -1242,7 +1399,26 @@ export default function KeepWarm() {
                     <Button tone={listMode === 'excluded' ? 'primary' : 'plain'} onClick={() => setListMode('excluded')}>
                       Excluded{audience ? ` (${audience.excludedCount})` : ''}
                     </Button>
+                    {listMode === 'included' && (
+                      <>
+                        <Button onClick={selectAll}>Select all</Button>
+                        <Button onClick={selectNone}>Deselect all</Button>
+                        <span style={{ fontSize: 12, color: TERTIARY, alignSelf: 'center' }}>
+                          {selectedCount} ticked for the next send
+                        </span>
+                      </>
+                    )}
                   </div>
+
+                  {listMode === 'included' && handPicked && (
+                    <div style={{ fontSize: 12, color: AMBER, background: AMBER_BG, border: `1px solid ${AMBER}`,
+                                  borderRadius: 7, padding: '8px 11px', marginBottom: 10, lineHeight: 1.5 }}>
+                      These ticks apply to the next send only, and clear once it goes. Nobody is removed
+                      from the loop — unticking somebody here does not change their stage or exclude them
+                      from future emails.
+                    </div>
+                  )}
+
                   <input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
@@ -1253,7 +1429,15 @@ export default function KeepWarm() {
                     }}
                   />
                   <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
-                    {(audience?.rows || []).map(r => <AudienceRow key={r.email} row={r} />)}
+                    {(audience?.rows || []).map(r => (
+                      <AudienceRow
+                        key={r.email}
+                        row={r}
+                        selectable={listMode === 'included'}
+                        checked={isChecked(r.email)}
+                        onToggle={toggleOne}
+                      />
+                    ))}
                     {audience && audience.rows.length === 0 && (
                       <div style={{ padding: '16px 12px', fontSize: 13, color: MUTED }}>Nobody matches.</div>
                     )}
@@ -1354,6 +1538,18 @@ export default function KeepWarm() {
                 listData={listData}
                 listSearch={listSearch}
                 onListSearch={setListSearch}
+                isChecked={isChecked}
+                onToggleOne={toggleOne}
+                onAll={selectAll}
+                onNone={selectNone}
+                selectedCount={selectedCount}
+                handPicked={handPicked}
+                testTo={testTo}
+                onTestTo={setTestTo}
+                onTest={sendTestEmail}
+                testBusy={testBusy}
+                testNote={testNote}
+                testError={testError}
               />
             </>)}
 

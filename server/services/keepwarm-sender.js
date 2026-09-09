@@ -221,15 +221,18 @@ export function cadenceConfig() {
 /**
  * Freeze an approved draft and its audience into a run.
  *
+ * `only` is an optional array of addresses. When present the run goes to just
+ * those people — the operator has unticked the rest for this one send. It is
+ * intersected with the live audience rather than trusted: an address that is
+ * not currently in the loop, or has unsubscribed since the screen was drawn,
+ * must not become sendable by arriving in a request body.
+ *
  * Returns { ok: true, runId, recipientCount, sendAfter } or
  * { ok: false, reason } where reason is one of:
  *   not_configured | no_draft | not_approved | already_sent |
- *   run_in_progress | empty_audience | over_cap
- *
- * Every one of those is something the operator needs to read, not a transient
- * failure worth retrying behind their back.
+ *   run_in_progress | empty_audience | no_match | over_cap
  */
-export function queueRun(draftId) {
+export function queueRun(draftId, { only = null, exclude = null } = {}) {
   if (!FROM_EMAIL || !FROM_NAME) {
     return { ok: false, reason: 'not_configured' };
   }
@@ -246,8 +249,30 @@ export function queueRun(draftId) {
 
   const { included } = buildAudience();
   if (!included.length) return { ok: false, reason: 'empty_audience' };
-  if (included.length > MAX_RECIPIENTS) {
-    return { ok: false, reason: 'over_cap', count: included.length, cap: MAX_RECIPIENTS };
+
+  // Two ways to hand-pick, because the screen has two shapes of tick. "Select
+  // all then untick three" sends an exclude list; "deselect all then tick
+  // myself" sends an only list. Sending the resolved list instead would mean
+  // the browser deciding who is in the audience, and a stale tab could then
+  // mail somebody who went dead an hour ago.
+  let recipients = included;
+  if (Array.isArray(only) && only.length) {
+    const wanted = new Set(only.map(normEmail).filter(Boolean));
+    recipients = included.filter(p => wanted.has(normEmail(p.email)));
+  } else if (Array.isArray(exclude) && exclude.length) {
+    const dropped = new Set(exclude.map(normEmail).filter(Boolean));
+    recipients = included.filter(p => !dropped.has(normEmail(p.email)));
+  }
+
+  if (!recipients.length) {
+    // Either everything was unticked, or every ticked address has dropped out
+    // of the audience since the screen was drawn. Refusing is right: falling
+    // back to the full list would be the opposite of what the ticks asked for.
+    return { ok: false, reason: 'no_match' };
+  }
+
+  if (recipients.length > MAX_RECIPIENTS) {
+    return { ok: false, reason: 'over_cap', count: recipients.length, cap: MAX_RECIPIENTS };
   }
 
   const runId = uuid();
@@ -268,8 +293,8 @@ export function queueRun(draftId) {
   // recipients with no header — would be picked up by the worker as an empty
   // send and marked complete, quietly skipping a fortnight.
   const write = db.transaction(() => {
-    insertRun.run(runId, draft.id, draft.subject, draft.html_body, included.length, sendAfter);
-    for (const p of included) {
+    insertRun.run(runId, draft.id, draft.subject, draft.html_body, recipients.length, sendAfter);
+    for (const p of recipients) {
       insertRecipient.run(
         uuid(), runId,
         p.externalCompanyId || null,
@@ -282,7 +307,12 @@ export function queueRun(draftId) {
   });
   write();
 
-  console.log(`[keepwarm] run ${runId} queued — ${included.length} recipient(s), sending after ${sendAfter}`);
+  const partial = recipients.length !== included.length;
+  console.log(
+    `[keepwarm] run ${runId} queued — ${recipients.length} recipient(s)`
+    + (partial ? ` (hand-picked from ${included.length} in the loop)` : '')
+    + `, sending after ${sendAfter}`
+  );
 
   // Fire when the window closes rather than waiting for the next tick. The
   // ticker is the safety net if the process restarts inside the window.
@@ -291,7 +321,67 @@ export function queueRun(draftId) {
       console.error('[keepwarm] post-undo send failed:', err && err.stack || err));
   }, UNDO_SECONDS * 1000 + 500).unref?.();
 
-  return { ok: true, runId, recipientCount: included.length, sendAfter, undoSeconds: UNDO_SECONDS };
+  return {
+    ok: true, runId, sendAfter,
+    recipientCount: recipients.length,
+    audienceCount: included.length,
+    partial,
+    undoSeconds: UNDO_SECONDS,
+  };
+}
+
+/**
+ * Send one copy of a draft to a single address, immediately.
+ *
+ * Deliberately NOT a run. It writes nothing to keepwarm_runs, marks no
+ * recipients, does not touch the draft's status and never appears in the Sent
+ * tab. That matters: the obvious way to test — untick everyone but yourself on
+ * a real send — marks the draft sent and it can never go to the other people
+ * afterwards. A good email gets burned proving the plumbing works, and nobody
+ * notices for a fortnight.
+ *
+ * The suppression list is still honoured. A test is a real email arriving in a
+ * real inbox, and "it was only a test" is not a defence to someone who asked
+ * not to be emailed.
+ */
+export async function sendTest({ draftId, toEmail }) {
+  if (!FROM_EMAIL || !FROM_NAME) return { ok: false, reason: 'not_configured' };
+
+  const email = normEmail(toEmail);
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return { ok: false, reason: 'bad_email' };
+  }
+
+  const draft = getDraft(draftId);
+  if (!draft) return { ok: false, reason: 'no_draft' };
+
+  if (isSuppressed(email)) return { ok: false, reason: 'suppressed' };
+
+  const html = renderEmailHtml({
+    bodyHtml:  draft.html_body,
+    unsubUrl:  unsubUrlFor(email),
+    firstName: null,
+  });
+
+  try {
+    const { messageId } = await sendEmail({
+      to:        email,
+      fromName:  FROM_NAME,
+      fromEmail: FROM_EMAIL,
+      replyTo:   FROM_EMAIL,
+      // Marked in the subject so a test sitting in the inbox next to the real
+      // thing a fortnight later cannot be mistaken for it.
+      subject:   `[TEST] ${draft.subject}`,
+      htmlBody:  html,
+      plainBody: htmlToText(html),
+    });
+    console.log(`[keepwarm] test of draft ${draftId} sent to ${email}`);
+    return { ok: true, messageId: messageId || null };
+  } catch (err) {
+    const msg = (err && err.message) ? err.message.slice(0, 500) : 'send failed';
+    console.error('[keepwarm] test send failed:', msg);
+    return { ok: false, reason: 'send_failed', detail: msg };
+  }
 }
 
 /**
