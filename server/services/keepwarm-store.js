@@ -96,6 +96,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_kw_drafts_batch  ON keepwarm_drafts(batch_id, position);
 `);
 
+// Emptying the bin does not delete the row.
+//
+// A rejected draft is still doing a job after you have binned it: `previousSubjects`
+// feeds every rejected subject back into the next generation as a do-not-repeat
+// list. Delete the rows and the ideas you threw away start coming back a few
+// batches later, which reads as the generator getting worse rather than as a
+// consequence of tidying up.
+//
+// So "delete all" stamps deleted_at and the screen stops showing them, while the
+// subject line goes on earning its keep.
+try {
+  const cols = db.prepare(`PRAGMA table_info(keepwarm_drafts)`).all().map(c => c.name);
+  if (!cols.includes('deleted_at')) {
+    db.exec(`ALTER TABLE keepwarm_drafts ADD COLUMN deleted_at TEXT`);
+    console.log('[keepwarm] added deleted_at column');
+  }
+} catch (err) {
+  console.error('[keepwarm] deleted_at migration failed:', err.message);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -477,7 +497,11 @@ export function insertDrafts(batchId, drafts) {
 }
 
 export function listDrafts({ status = null, limit = 100 } = {}) {
-  const where = status ? 'WHERE status = ?' : '';
+  // deleted_at IS NULL is not optional here — an emptied bin must stay empty on
+  // every filter, including "all".
+  const where = status
+    ? 'WHERE deleted_at IS NULL AND status = ?'
+    : 'WHERE deleted_at IS NULL';
   const params = status ? [status, limit] : [limit];
   return db.prepare(`
     SELECT id, batch_id, position, angle, subject, html_body, plain_body,
@@ -487,6 +511,23 @@ export function listDrafts({ status = null, limit = 100 } = {}) {
      ORDER BY created_at DESC, position ASC
      LIMIT ?
   `).all(...params);
+}
+
+/**
+ * Empty the bin. Returns how many were cleared.
+ *
+ * Only ever touches rejected drafts. A draft that is merely unreviewed is not
+ * rubbish — it is work nobody has looked at yet — and approved or sent ones are
+ * obviously off limits.
+ */
+export function emptyBin() {
+  const res = db.prepare(`
+    UPDATE keepwarm_drafts
+       SET deleted_at = datetime('now')
+     WHERE status = 'rejected' AND deleted_at IS NULL
+  `).run();
+  if (res.changes) console.log(`[keepwarm] bin emptied — ${res.changes} draft(s) cleared`);
+  return res.changes;
 }
 
 export function getDraft(id) {

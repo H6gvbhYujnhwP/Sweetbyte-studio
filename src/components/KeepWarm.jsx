@@ -917,6 +917,8 @@ export default function KeepWarm() {
     : selExcept.size;
   const handPicked = selBase === 'none' || selExcept.size > 0;
 
+  const [emptying, setEmptying]   = useState(false);
+
   // Test sends
   const [testTo, setTestTo]       = useState('');
   const [testBusy, setTestBusy]   = useState(false);
@@ -1062,6 +1064,27 @@ export default function KeepWarm() {
       setSendError(err.message);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function emptyTheBin() {
+    const n = drafts.filter(d => d.status === 'rejected').length;
+    if (!n) return;
+    if (!window.confirm(`Delete all ${n} binned ${n === 1 ? 'email' : 'emails'}?\n\nThey will not come back.`)) return;
+
+    setEmptying(true);
+    try {
+      const r = await fetch('/api/keepwarm/drafts/bin', { method: 'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || 'Could not empty the bin');
+      }
+      await loadDrafts();
+      setFilter('all');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEmptying(false);
     }
   }
 
@@ -1299,7 +1322,12 @@ export default function KeepWarm() {
     }
   }
 
-  const shown = drafts.filter(d => filter === 'all' || d.status === filter);
+  // "All" now means everything still in play. Binned ideas are deliberately not
+  // in it — the point of binning one is not to look at it again.
+  const shown = drafts.filter(d => (
+    filter === 'all' ? d.status !== 'rejected' : d.status === filter
+  ));
+  const binCount = drafts.filter(d => d.status === 'rejected').length;
   const cfg = overview?.config || {};
 
   return (
@@ -1495,10 +1523,24 @@ export default function KeepWarm() {
               <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0, marginRight: 6 }}>Drafts</h2>
               {['all', 'draft', 'approved', 'rejected'].map(f => (
                 <Button key={f} tone={filter === f ? 'primary' : 'plain'} onClick={() => setFilter(f)}>
-                  {f === 'all' ? 'All' : STATUS_STYLE[f].label}
+                  {f === 'all' ? 'All' : f === 'rejected' ? `Bin${binCount ? ` (${binCount})` : ''}` : STATUS_STYLE[f].label}
                 </Button>
               ))}
+
+              {filter === 'rejected' && binCount > 0 && (
+                <Button tone="danger" disabled={emptying} onClick={emptyTheBin}>
+                  {emptying ? 'Emptying…' : `Delete all ${binCount}`}
+                </Button>
+              )}
             </div>
+
+            {filter === 'rejected' && (
+              <div style={{ fontSize: 12, color: TERTIARY, margin: '-4px 0 12px', lineHeight: 1.6 }}>
+                Binned emails are out of the way and will never be sent. Emptying the bin clears them
+                from here for good, but Studio still remembers the subject lines so the generator does
+                not write the same ideas again.
+              </div>
+            )}
 
             {shown.length === 0 ? (
               <Card><div style={{ fontSize: 14, color: MUTED }}>

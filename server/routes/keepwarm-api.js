@@ -40,6 +40,7 @@ import {
   getDraft,
   updateDraft,
   setDraftStatus,
+  emptyBin,
   previousSubjects,
 } from '../services/keepwarm-store.js';
 import {
@@ -436,6 +437,25 @@ router.post('/send', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[keepwarm] send failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /drafts/bin
+ *
+ * Empties the bin. Rejected drafts stop appearing anywhere on the screen, but
+ * their subject lines stay in the do-not-repeat list fed to the generator —
+ * see the note in keepwarm-store.js. There is no DELETE /drafts/:id, so "bin"
+ * cannot be read as an id; if a single-draft delete is ever added it must be
+ * declared after this one.
+ */
+router.delete('/drafts/bin', (req, res) => {
+  try {
+    const cleared = emptyBin();
+    res.json({ ok: true, cleared });
+  } catch (err) {
+    console.error('[keepwarm] empty bin failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
