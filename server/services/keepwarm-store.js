@@ -131,8 +131,17 @@ export const ALL_STAGES = ['new', 'contacted', 'voicemail', 'prospect', 'hot_pro
  */
 export const LOCKED_STAGES = ['customer'];
 
+/**
+ * The words shown on screen for each stage.
+ *
+ * These must match the column labels on the WorkTrackr pipeline board, not the
+ * stored keys. WorkTrackr's phase 7 renamed the `new` column to "Suspect" as a
+ * label-only change — the stored value stayed `new` so nothing had to be
+ * migrated. Studio receives the key and has to translate it back, otherwise the
+ * same 22 people are called "New" here and "Suspect" there.
+ */
 export const STAGE_LABELS = {
-  new:          'New',
+  new:          'Suspect',
   contacted:    'Contacted',
   voicemail:    'Voicemail',
   prospect:     'Prospect',
