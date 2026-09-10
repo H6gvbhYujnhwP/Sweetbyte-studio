@@ -286,6 +286,62 @@ function SubjectIdeaRow({ idea, checked, onToggle, onDelete, busy }) {
   );
 }
 
+// The send-day banner. Three states and nothing in between: today is the day
+// and it has not gone, today is the day and it has, or it is neither and the
+// next date is worth knowing quietly.
+//
+// The "sent" state names the next date rather than just saying well done,
+// because the useful half of "that is done" is "and the next one is when".
+function SendDayBanner({ r }) {
+  if (!r) return null;
+
+  const box = (bg, border, fg, children) => (
+    <div style={{
+      background: bg, border: `1px solid ${border}`, color: fg,
+      borderRadius: 8, padding: '11px 13px', marginBottom: 14,
+      fontSize: 13, lineHeight: 1.6,
+    }}>{children}</div>
+  );
+
+  if (r.isSendDay && r.sentToday) {
+    return box(GOOD_BG, GOOD, GOOD, (
+      <>
+        <strong>Sent today.</strong>{' '}
+        {r.sentSubject ? `"${r.sentSubject}" has gone out. ` : ''}
+        Next send day is {fmtDate(r.nextSendDay)}.
+      </>
+    ));
+  }
+
+  if (r.isSendDay) {
+    return box(AMBER_BG, AMBER, AMBER, (
+      <>
+        <strong>Send day.</strong>{' '}
+        {r.approvedCount > 0
+          ? <>“{r.topSubject}” is approved and top of the queue. {r.audienceCount} people are in the loop — open the Schedule tab and press Send.</>
+          : <>Nothing is approved, so nothing will go out. Generate a few below and approve one.</>}
+      </>
+    ));
+  }
+
+  if (r.isEveOfSend) {
+    return box(AMBER_BG, AMBER, AMBER, (
+      <>
+        <strong>Send day is tomorrow.</strong>{' '}
+        {r.approvedCount > 0
+          ? <>“{r.topSubject}” is ready. Nothing to do today.</>
+          : <>Nothing is approved yet — today is the day to get one written and approved.</>}
+      </>
+    ));
+  }
+
+  return (
+    <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 14 }}>
+      Next send day: {fmtDate(r.nextSendDay)}. A reminder goes to {r.remindTo} the day before and again at {r.remindAt}.
+    </div>
+  );
+}
+
 function DraftCard({ draft, onOpen, onStatus, busy }) {
   return (
     <div style={{
@@ -1583,6 +1639,8 @@ export default function KeepWarm() {
         {!loading && !cfg.anthropicConfigured && (
           <Banner tone="bad">ANTHROPIC_API_KEY is not set — generation will fail.</Banner>
         )}
+
+        {!loading && <SendDayBanner r={overview.reminder} />}
 
         {loading ? (
           <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>

@@ -50,6 +50,7 @@ import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
 import { buildAudience, getDraft } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
+import { londonNow, isSendDay, nextSendDay } from './keepwarm-reminders.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -204,19 +205,33 @@ export function lastCompletedRun() {
 }
 
 /**
- * When the next fortnightly slot falls due.
+ * When the next send day falls.
  *
- * Counted from the last completed send rather than from a fixed calendar, so a
- * send that slipped by a few days moves the following one with it instead of
- * bunching two together to catch up.
+ * The 2nd and 4th Tuesday of the month, from keepwarm-reminders.js — the same
+ * calendar the reminder emails are driven by, so the date on the Schedule tab
+ * and the date in the inbox can never disagree.
+ *
+ * Previously this counted CADENCE_DAYS forward from the last completed send.
+ * That drifted: a send that slipped to a Thursday moved every send after it to
+ * a Thursday. A named day does not drift. KEEPWARM_CADENCE_DAYS is no longer
+ * used for scheduling and is kept only so an existing Render setting cannot
+ * break the boot; the queue behind the first draft now lands on the send days
+ * that follow it.
  */
 export function nextDueDate() {
+  const { date } = londonNow();
   const last = lastCompletedRun();
   const from = last && (last.finished_at || last.created_at);
-  if (!from) return null; // nothing sent yet — the first one is due whenever the operator says
-  const base = new Date(from.includes('T') ? from : from.replace(' ', 'T') + 'Z');
-  base.setUTCDate(base.getUTCDate() + CADENCE_DAYS);
-  return base.toISOString().slice(0, 10);
+
+  // If today is a send day and one has already gone out today, the next one is
+  // the one after — otherwise the screen would keep insisting today is due.
+  if (isSendDay(date) && from && from.slice(0, 10) === date) {
+    const d = new Date(date + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + 1);
+    return nextSendDay(d.toISOString().slice(0, 10));
+  }
+
+  return nextSendDay(date);
 }
 
 export function cadenceConfig() {
@@ -617,9 +632,23 @@ export function schedule(limit = 10) {
     Date.now(),
   );
 
+  // The first slot is the next send day; the ones behind it land on the send
+  // days after that, rather than on a rolling fortnight that would not fall on
+  // a Tuesday at all.
+  let cursor = new Date(startMs).toISOString().slice(0, 10);
+  const slotDates = approved.map((_, idx) => {
+    if (idx === 0) {
+      cursor = nextSendDay(cursor) || cursor;
+      return cursor;
+    }
+    const after = new Date(cursor + 'T12:00:00Z');
+    after.setUTCDate(after.getUTCDate() + 1);
+    cursor = nextSendDay(after.toISOString().slice(0, 10)) || cursor;
+    return cursor;
+  });
+
   const slots = approved.map((d, idx) => {
-    const when = new Date(startMs);
-    when.setUTCDate(when.getUTCDate() + idx * CADENCE_DAYS);
+    const when = new Date(slotDates[idx] + 'T12:00:00Z');
     return {
       draftId:        d.id,
       subject:        d.subject,

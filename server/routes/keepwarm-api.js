@@ -54,6 +54,7 @@ import {
   ragLoaded,
   ALLOWED_COUNTS,
 } from '../services/keepwarm-generator.js';
+import { reminderStatus } from '../services/keepwarm-reminders.js';
 import {
   listIdeas,
   addIdeas,
@@ -112,6 +113,9 @@ router.get('/overview', (req, res) => {
       // send, which is what the tab counter shows.
       deadInAudience: dead,
       deadCount: deadCount(),
+      // Send-day state for the banner. Worked out from the same calendar the
+      // reminder emails use, so the screen and the inbox cannot disagree.
+      reminder: reminderStatus(included.length),
       audienceCount: included.length,
       excludedCount: excluded.length,
       stageRefresh: refresh,

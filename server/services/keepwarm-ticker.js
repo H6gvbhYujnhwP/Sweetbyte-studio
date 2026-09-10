@@ -22,6 +22,7 @@
 
 import { processDue } from './keepwarm-sender.js';
 import { reconcileBounces } from './bounce-store.js';
+import { runReminderCheck } from './keepwarm-reminders.js';
 
 const TICK_INTERVAL_MS = 30 * 1000;
 
@@ -66,6 +67,15 @@ async function tick() {
       reconcileBounces();
     } catch (err) {
       console.error('[keepwarm] bounce reconcile failed:', err && err.message);
+    }
+
+    // Send-day reminders. Two mornings a month this produces one email; every
+    // other pass it is a date comparison and a single indexed lookup. It runs
+    // before processDue() so a reminder is never delayed behind a batch send.
+    try {
+      await runReminderCheck();
+    } catch (err) {
+      console.error('[keepwarm] reminder check failed:', err && err.message);
     }
 
     const results = await processDue();
