@@ -250,6 +250,42 @@ function DeadRow({ row, onRemove, busy }) {
   );
 }
 
+// One of the operator's own subject lines. A line that has been sent, or that
+// is already sitting in a draft, is shown struck through and cannot be ticked —
+// visible rather than hidden, so it is obvious the line was used rather than
+// lost. Module level, per the SUB-COMPONENT RULE at the top of the file.
+function SubjectIdeaRow({ idea, checked, onToggle, onDelete, busy }) {
+  const usable = idea.usable;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '8px 12px', borderBottom: `1px solid ${BORDER}`,
+    }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={!usable || busy}
+        onChange={() => onToggle(idea.id)}
+        style={{ width: 15, height: 15, cursor: usable ? 'pointer' : 'default', flexShrink: 0 }}
+      />
+      <span style={{
+        flex: 1, minWidth: 0, fontSize: 13,
+        color: usable ? TEXT : TERTIARY,
+        textDecoration: usable ? 'none' : 'line-through',
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {idea.text}
+      </span>
+      {!usable && (
+        <span style={{ fontSize: 12, color: TERTIARY, flexShrink: 0 }}>{idea.state}</span>
+      )}
+      <Button tone="plain" disabled={busy} onClick={() => onDelete(idea.id)} style={{ flexShrink: 0, padding: '3px 9px', fontSize: 12 }}>
+        Bin
+      </Button>
+    </div>
+  );
+}
+
 function DraftCard({ draft, onOpen, onStatus, busy }) {
   return (
     <div style={{
@@ -893,6 +929,10 @@ export default function KeepWarm() {
   const [audience, setAudience]   = useState(null);
   const [showList, setShowList]   = useState(false);
   const [listMode, setListMode]   = useState('included');
+  const [ideas, setIdeas]         = useState([]);
+  const [pickedIdeas, setPicked]  = useState([]);
+  const [ideaText, setIdeaText]   = useState('');
+  const [ideaBusy, setIdeaBusy]   = useState(false);
   const [dead, setDead]           = useState(null);
   const [deadBusy, setDeadBusy]   = useState(false);
   const [search, setSearch]       = useState('');
@@ -1016,6 +1056,14 @@ export default function KeepWarm() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadIdeas = useCallback(async () => {
+    try {
+      const r = await fetch('/api/keepwarm/subjects');
+      const d = await r.json();
+      if (r.ok) setIdeas(d.ideas || []);
+    } catch { /* ignore */ }
+  }, []);
+
   const loadDead = useCallback(async (q) => {
     try {
       const r = await fetch(`/api/keepwarm/dead?q=${encodeURIComponent(q || '')}`);
@@ -1047,7 +1095,8 @@ export default function KeepWarm() {
   useEffect(() => {
     if (tab === 'schedule') loadSchedule();
     if (tab === 'sent') loadSent();
-  }, [tab, loadSchedule, loadSent]);
+    if (tab === 'drafts') loadIdeas();
+  }, [tab, loadSchedule, loadSent, loadIdeas]);
 
   // While a run is queued or sending, refresh every few seconds. Stops as soon
   // as the run finishes — no point polling an idle screen forever.
@@ -1308,6 +1357,48 @@ export default function KeepWarm() {
     }
   }
 
+  function toggleIdea(id) {
+    setPicked(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  async function addIdeaLines() {
+    const text = ideaText.trim();
+    if (!text) return;
+    setIdeaBusy(true);
+    setGenError(null);
+    try {
+      const r = await fetch('/api/keepwarm/subjects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'could not add');
+      setIdeas(d.ideas || []);
+      setIdeaText('');
+      if (d.skipped) setGenNote(`${d.added} added. ${d.skipped} were already on the list.`);
+    } catch (err) {
+      setGenError(err.message);
+    } finally {
+      setIdeaBusy(false);
+    }
+  }
+
+  async function binIdea(id) {
+    setIdeaBusy(true);
+    try {
+      const r = await fetch(`/api/keepwarm/subjects/${id}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'could not remove');
+      setIdeas(d.ideas || []);
+      setPicked(prev => prev.filter(x => x !== id));
+    } catch (err) {
+      setGenError(err.message);
+    } finally {
+      setIdeaBusy(false);
+    }
+  }
+
   async function generate() {
     setGenerating(true);
     setGenError(null);
@@ -1316,13 +1407,17 @@ export default function KeepWarm() {
       const r = await fetch('/api/keepwarm/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count }),
+        body: JSON.stringify({ count, subjectIds: pickedIdeas }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Generation failed');
       if (d.short) setGenNote(`Asked for ${d.requested}, got ${d.generated} back.`);
+      // The ticks clear because those lines are now spoken for by a draft. They
+      // are not used up yet — bin the draft and the line comes back.
+      setPicked([]);
       setFilter('draft');
       await loadDrafts();
+      await loadIdeas();
     } catch (err) {
       setGenError(err.message);
     } finally {
@@ -1659,6 +1754,51 @@ export default function KeepWarm() {
               {genError && <Banner tone="bad">{genError}</Banner>}
               {genNote && <Banner tone="warn">{genNote}</Banner>}
 
+              {/* ── The operator's own subject lines ────────────────────── */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Your subject lines</span>
+                  <span style={{ fontSize: 12, color: TERTIARY }}>
+                    {ideas.filter(i => i.usable).length} unused
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, lineHeight: 1.5 }}>
+                  Tick a line to have an email written around it, word for word. Leave them all
+                  unticked and Studio invents its own, as before.
+                </div>
+
+                {ideas.length > 0 && (
+                  <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden',
+                                maxHeight: 260, overflowY: 'auto', marginBottom: 10 }}>
+                    {ideas.map(i => (
+                      <SubjectIdeaRow
+                        key={i.id}
+                        idea={i}
+                        checked={pickedIdeas.includes(i.id)}
+                        onToggle={toggleIdea}
+                        onDelete={binIdea}
+                        busy={ideaBusy || generating}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                <textarea
+                  value={ideaText}
+                  onChange={(e) => setIdeaText(e.target.value)}
+                  placeholder="Add a subject line — or paste several, one per line"
+                  rows={ideaText.includes('\n') ? 5 : 2}
+                  style={{
+                    width: '100%', boxSizing: 'border-box', padding: '9px 11px', fontSize: 13,
+                    border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit',
+                    resize: 'vertical', marginBottom: 8,
+                  }}
+                />
+                <Button onClick={addIdeaLines} disabled={ideaBusy || !ideaText.trim()}>
+                  {ideaBusy ? 'Saving…' : 'Add'}
+                </Button>
+              </div>
+
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <select
                   value={count}
@@ -1678,6 +1818,13 @@ export default function KeepWarm() {
                 {generating && (
                   <span style={{ fontSize: 13, color: MUTED }}>
                     This takes up to a minute for nine. Leave the page open.
+                  </span>
+                )}
+                {!generating && pickedIdeas.length > 0 && (
+                  <span style={{ fontSize: 12, color: pickedIdeas.length > count ? DANGER : TERTIARY }}>
+                    {pickedIdeas.length > count
+                      ? `${pickedIdeas.length} lines ticked but only ${count} emails asked for — untick ${pickedIdeas.length - count}, or ask for more.`
+                      : `${pickedIdeas.length} from your lines, ${count - pickedIdeas.length} from Studio's own ideas.`}
                   </span>
                 )}
               </div>

@@ -394,6 +394,94 @@ Return ONLY valid JSON, no markdown fences:
 
 
 /**
+ * Write one email around a subject line the operator wrote.
+ *
+ * Distinct from generateBody() above, which rewrites an existing body and needs
+ * one to move away from. This starts from nothing but the line.
+ *
+ * The subject is passed through untouched and returned untouched. It is never
+ * shown to the model as something to improve, because the whole point is that
+ * these are in Billy's voice rather than the model's, and a model asked to
+ * consider a line will tidy it into house style without being told to.
+ *
+ * `avoid` is the do-not-repeat list, used here only to stop the BODY retreading
+ * an angle that has already gone out. The subject is fixed regardless.
+ */
+export async function generateFromSubject({ subject, avoid = [] }) {
+  if (!RAG) throw new Error('Company knowledge base is missing from the server — cannot generate.');
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on Studio.');
+
+  const fixed = String(subject || '').trim();
+  if (!fixed) throw new Error('No subject line given.');
+
+  const avoidBlock = avoid.length
+    ? `\nANGLES ALREADY USED — do not retread these:\n${avoid.map(a => `- "${a.subject}"${a.angle ? ` (angle: ${a.angle})` : ''}`).join('\n')}\n`
+    : '';
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 2000,
+    system: SYSTEM_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `COMPANY KNOWLEDGE BASE:
+${RAG}
+
+The subject line is FIXED. It was written by hand and is not yours to improve, shorten, punctuate differently or reword in any way:
+
+"${fixed}"
+
+Write the email that belongs under it.
+${avoidBlock}
+HARD RULES:
+1. The body must deliver what the subject promises. If the subject is a joke about IT frustration, the first line must land that recognition before it sells anything.
+2. Do not state a statistic, price, percentage or time figure that is not in section 3 or section 7 of the knowledge base.
+3. Do not name a client that is not in section 8.
+4. No surname for any team member except Sweetman.
+5. UK English. "Sweetbyte" is one word, capital S only.
+6. No em dashes, no exclamation marks, no emoji, no images.
+7. Do not claim the reader is an existing customer, do not reference a specific conversation, and do not invent anything about their business.
+8. No sign-off, no signature, no phone number, no unsubscribe line. Those are added afterwards. End on the last sentence of your final paragraph.
+
+LENGTH AND SHAPE: 120 to 200 words. Short paragraphs of two or three sentences. Plain English, first person plural, address the reader as "you". Open on something the reader recognises about their own situation, make one point well, close with a single low-pressure call to action.
+
+HTML: plain paragraphs only, each exactly <p style="${P_STYLE}">text</p>. No bold, no <strong>, no headings, no tables, no images, no inline links.
+
+Return ONLY valid JSON, no markdown fences:
+{"angle":"four to six words naming the angle","html":"<p style=\\"${P_STYLE}\\">...</p>","plain":"the same email as plain text"}`,
+    }],
+  });
+
+  const text = (message.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('');
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Claude did not return JSON. First 200 characters: ' + text.slice(0, 200));
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (err) {
+    throw new Error('Claude returned malformed JSON: ' + err.message);
+  }
+
+  const html = typeof parsed.html === 'string' ? parsed.html.trim() : '';
+  if (!html) throw new Error('Claude returned an empty email body for "' + fixed + '".');
+
+  // The operator's line, returned exactly as it was given. Nothing the model
+  // said about the subject is read back.
+  return {
+    subject: fixed,
+    angle:   String(parsed.angle || '').trim().slice(0, 120) || null,
+    html,
+    plain:   typeof parsed.plain === 'string' ? parsed.plain.trim() : null,
+  };
+}
+
+
+/**
  * Ask Claude for `count` drafts.
  *
  * Throws on anything that would produce silently wrong output — missing RAG,
@@ -405,7 +493,12 @@ Return ONLY valid JSON, no markdown fences:
 export async function generateEmails(count, previous = []) {
   if (!RAG) throw new Error('Company knowledge base is missing from the server — cannot generate.');
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on Studio.');
-  if (!ALLOWED_COUNTS.includes(count)) throw new Error(`Count must be one of ${ALLOWED_COUNTS.join(', ')}.`);
+  // Not restricted to ALLOWED_COUNTS. Those are the buttons on the screen; this
+  // is how many the model is asked for, and when the operator has picked two of
+  // their own subject lines out of a batch of six, this is asked for four.
+  if (!Number.isInteger(count) || count < 1 || count > 9) {
+    throw new Error('Count must be a whole number between 1 and 9.');
+  }
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',

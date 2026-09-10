@@ -45,6 +45,7 @@ import {
 } from '../services/keepwarm-store.js';
 import {
   generateEmails,
+  generateFromSubject,
   generateSubject,
   generateBody,
   renderEmailHtml,
@@ -53,6 +54,12 @@ import {
   ragLoaded,
   ALLOWED_COUNTS,
 } from '../services/keepwarm-generator.js';
+import {
+  listIdeas,
+  addIdeas,
+  deleteIdea,
+  resolveIdeas,
+} from '../services/keepwarm-subjects.js';
 import {
   listDead,
   deadCount,
@@ -251,6 +258,48 @@ router.post('/dead/hide-all', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Subject lines the operator wrote
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/subjects', (req, res) => {
+  try {
+    res.json({ ideas: listIdeas() });
+  } catch (err) {
+    console.error('[keepwarm] subject list failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /subjects  { text }
+ *
+ * One line, or a pasted block with one per line. Adding nine at once is the
+ * normal case, so the box takes the whole list rather than making the operator
+ * press Add nine times.
+ */
+router.post('/subjects', (req, res) => {
+  try {
+    const result = addIdeas((req.body || {}).text);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ ...result, ideas: listIdeas() });
+  } catch (err) {
+    console.error('[keepwarm] subject add failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/subjects/:id', (req, res) => {
+  try {
+    const result = deleteIdea(req.params.id);
+    if (!result.ok) return res.status(404).json({ error: 'That line is not there.' });
+    res.json({ ...result, ideas: listIdeas() });
+  } catch (err) {
+    console.error('[keepwarm] subject delete failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Generation
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -271,13 +320,45 @@ router.post('/generate', async (req, res) => {
     return res.status(400).json({ error: `count must be one of ${ALLOWED_COUNTS.join(', ')}` });
   }
 
+  // Subject lines the operator ticked. Each one becomes exactly one draft,
+  // carrying that line word for word; the rest of the batch is Studio's own
+  // ideas as before. Ticking none is the original behaviour untouched.
+  const { subjects: picked, error: pickError } = resolveIdeas((req.body || {}).subjectIds);
+  if (pickError) return res.status(400).json({ error: pickError });
+
+  // Refused rather than silently trimmed. Somebody who ticks four lines and
+  // asks for three has made a decision the screen cannot make for them — which
+  // of the four to drop is not a choice code should be inventing.
+  if (picked.length > count) {
+    return res.status(400).json({
+      error: `You have picked ${picked.length} subject lines but asked for ${count} emails. Untick ${picked.length - count}, or ask for more.`,
+    });
+  }
+
   const batchId = createBatch(count);
   try {
-    const drafts = await generateEmails(count, previousSubjects(30));
+    const previous = previousSubjects(30);
+
+    // Written one at a time because each has its own fixed subject, and in
+    // sequence rather than all at once so a rate limit surfaces as one clear
+    // failure rather than a partial batch with a gap in the middle.
+    const fromLines = [];
+    for (const subject of picked) {
+      fromLines.push(await generateFromSubject({ subject, avoid: previous }));
+    }
+
+    // The free ones are told about the picked lines as well, so Studio does not
+    // invent a fourth email on the same joke the operator just chose.
+    const remaining = count - picked.length;
+    const invented = remaining > 0
+      ? await generateEmails(remaining, [...previous, ...picked.map(subject => ({ subject, angle: null }))])
+      : [];
+
+    const drafts = [...fromLines, ...invented];
     insertDrafts(batchId, drafts);
     finishBatch(batchId);
 
-    console.log(`[keepwarm] generated ${drafts.length} draft(s) (asked for ${count})`);
+    console.log(`[keepwarm] generated ${drafts.length} draft(s) (asked for ${count}, ${picked.length} from the operator's own lines)`);
     res.json({
       batchId,
       generated: drafts.length,
