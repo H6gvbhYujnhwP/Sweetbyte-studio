@@ -48,6 +48,7 @@
 import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { isSuppressed } from './service-email-sender.js';
+import { deadReasonFor } from './bounce-store.js';
 import { greetingFirstName } from './name-parser.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -424,14 +425,20 @@ export function stageCounts() {
   for (const s of ALL_STAGES) counts[s] = 0;
   counts.__none = 0;
   let suppressed = 0;
+  let dead = 0;
 
   for (const row of rawAudience()) {
+    // Dead is checked first because isSuppressed() now returns true for a dead
+    // address as well as an opted-out one. Checked the other way round, every
+    // bounced address would be counted as an unsubscribe, and the opt-out
+    // figure is one the operator reads as "the copy is landing badly".
+    if (deadReasonFor(row.email)) { dead++; continue; }
     if (isSuppressed(row.email)) { suppressed++; continue; }
     const key = row.stage && ALL_STAGES.includes(row.stage) ? row.stage : '__none';
     counts[key] = (counts[key] || 0) + 1;
   }
 
-  return { counts, suppressed };
+  return { counts, suppressed, dead };
 }
 
 /**
@@ -454,6 +461,13 @@ export function buildAudience() {
   for (const row of rawAudience()) {
     const p = project(row);
 
+    // Same ordering rule as stageCounts: a dead address is also suppressed, so
+    // asking the wrong question first would label every bounce "unsubscribed".
+    const deadWhy = deadReasonFor(p.email);
+    if (deadWhy) {
+      excluded.push({ ...p, reason: `bounced — ${deadWhy.toLowerCase()}`, dead: true });
+      continue;
+    }
     if (isSuppressed(p.email)) {
       excluded.push({ ...p, reason: 'unsubscribed' });
       continue;

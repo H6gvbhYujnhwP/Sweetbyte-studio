@@ -54,6 +54,12 @@ import {
   ALLOWED_COUNTS,
 } from '../services/keepwarm-generator.js';
 import {
+  listDead,
+  deadCount,
+  hideDead,
+  hideAllDead,
+} from '../services/bounce-store.js';
+import {
   queueRun,
   sendTest,
   cancelRun,
@@ -74,7 +80,7 @@ router.use(requireAuth);
 router.get('/overview', (req, res) => {
   try {
     const settings = getSettings();
-    const { counts, suppressed } = stageCounts();
+    const { counts, suppressed, dead } = stageCounts();
     const { included, excluded } = buildAudience();
     const refresh = lastStageRefresh();
 
@@ -92,6 +98,13 @@ router.get('/overview', (req, res) => {
       })),
       noStageCount: counts.__none || 0,
       suppressedCount: suppressed,
+      // Two different numbers on purpose. `deadInAudience` is how many people
+      // the bounce list has taken out of THIS audience — the one that explains
+      // a smaller headcount. `deadCount` is everything on the Dead list,
+      // including addresses that bounced on a campaign rather than a keep-warm
+      // send, which is what the tab counter shows.
+      deadInAudience: dead,
+      deadCount: deadCount(),
       audienceCount: included.length,
       excludedCount: excluded.length,
       stageRefresh: refresh,
@@ -170,6 +183,69 @@ router.get('/audience', (req, res) => {
     });
   } catch (err) {
     console.error('[keepwarm] audience failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dead addresses
+//
+// There is no refresh route here either. Bounce notifications are read out of
+// the event log by the keep-warm ticker every thirty seconds, and the first
+// pass after a deploy walks the whole log, so the historical backfill happens
+// on its own. A button would only ever do what the ticker already did.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /dead?q=
+ *
+ * Addresses that rejected mail permanently and have not been cleared off the
+ * screen. Searching is server-side for the same reason as the audience list.
+ */
+router.get('/dead', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const rows = listDead({ q, limit: 1000 });
+    res.json({
+      rows: rows.slice(0, 500),
+      total: rows.length,
+      truncated: rows.length > 500,
+      deadCount: deadCount(),
+    });
+  } catch (err) {
+    console.error('[keepwarm] dead list failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /dead/hide  { email }
+ *
+ * Takes one address off the screen. It stays dead and stays unmailable — the
+ * mailbox does not come back to life because somebody tidied the list. The
+ * response carries the new count so the tab label cannot drift from the list.
+ */
+router.post('/dead/hide', (req, res) => {
+  try {
+    const email = String((req.body || {}).email || '').trim();
+    if (!email) return res.status(400).json({ error: 'No address given' });
+    const result = hideDead(email);
+    res.json({ ...result, deadCount: deadCount() });
+  } catch (err) {
+    console.error('[keepwarm] dead hide failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /dead/hide-all — clears the whole list off the screen at once.
+ */
+router.post('/dead/hide-all', (req, res) => {
+  try {
+    const cleared = hideAllDead();
+    res.json({ ok: true, cleared, deadCount: deadCount() });
+  } catch (err) {
+    console.error('[keepwarm] dead hide-all failed:', err);
     res.status(500).json({ error: err.message });
   }
 });

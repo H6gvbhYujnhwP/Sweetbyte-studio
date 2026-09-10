@@ -209,6 +209,47 @@ function AudienceRow({ row, selectable = false, checked = true, onToggle }) {
   );
 }
 
+// One address on the Dead list. The reason is the plain-English version; the
+// raw diagnostic from the mail server sits underneath in small type, because
+// the person deciding whether to delete a prospect should not have to read
+// "smtp; 550 5.1.1 user unknown" to find out what happened, but should be able
+// to if they want to.
+//
+// Defined at module level like everything else on this screen — see the
+// SUB-COMPONENT RULE at the top of the file.
+function DeadRow({ row, onRemove, busy }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '9px 12px', borderBottom: `1px solid ${BORDER}`,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {row.contactName ? `${row.contactName} — ` : ''}{row.companyName || 'Unknown company'}
+        </div>
+        <div style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {row.email}
+        </div>
+        {row.diagnostic && (
+          <div style={{ fontSize: 11, color: TERTIARY, whiteSpace: 'nowrap', overflow: 'hidden',
+                        textOverflow: 'ellipsis', marginTop: 2 }}>
+            {row.diagnostic}
+          </div>
+        )}
+      </div>
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        <div style={{ fontSize: 12, color: DANGER }}>{row.reason}</div>
+        <div style={{ fontSize: 12, color: TERTIARY }}>
+          Bounced {fmt(row.lastSeenAt)}{row.source ? ` · ${row.source}` : ''}
+        </div>
+      </div>
+      <Button tone="plain" disabled={busy} onClick={() => onRemove(row.email)} style={{ flexShrink: 0 }}>
+        Remove
+      </Button>
+    </div>
+  );
+}
+
 function DraftCard({ draft, onOpen, onStatus, busy }) {
   return (
     <div style={{
@@ -852,6 +893,8 @@ export default function KeepWarm() {
   const [audience, setAudience]   = useState(null);
   const [showList, setShowList]   = useState(false);
   const [listMode, setListMode]   = useState('included');
+  const [dead, setDead]           = useState(null);
+  const [deadBusy, setDeadBusy]   = useState(false);
   const [search, setSearch]       = useState('');
 
   const [count, setCount]         = useState(3);
@@ -970,6 +1013,14 @@ export default function KeepWarm() {
       const r = await fetch(`/api/keepwarm/audience?show=${mode}&q=${encodeURIComponent(q || '')}`);
       const d = await r.json();
       if (r.ok) setAudience(d);
+    } catch { /* ignore */ }
+  }, []);
+
+  const loadDead = useCallback(async (q) => {
+    try {
+      const r = await fetch(`/api/keepwarm/dead?q=${encodeURIComponent(q || '')}`);
+      const d = await r.json();
+      if (r.ok) setDead(d);
     } catch { /* ignore */ }
   }, []);
 
@@ -1162,9 +1213,66 @@ export default function KeepWarm() {
 
   useEffect(() => {
     if (!showList) return;
+    // The dead list is its own endpoint rather than a third `show=` value on
+    // the audience one. The audience is derived from sends and carries stages
+    // and greetings; the dead list is keyed on the address and carries bounce
+    // reasons. Forcing them through one shape would mean half the fields being
+    // null on either side of the toggle.
+    if (listMode === 'dead') {
+      const t = setTimeout(() => loadDead(search), 250);
+      return () => clearTimeout(t);
+    }
     const t = setTimeout(() => loadAudience(listMode, search), 250);
     return () => clearTimeout(t);
-  }, [showList, listMode, search, loadAudience]);
+  }, [showList, listMode, search, loadAudience, loadDead]);
+
+  // Removing is a soft delete, the same as emptying the drafts bin: the row is
+  // hidden but keeps doing its job, so the address can never be mailed again.
+  // The confirm says that in as many words, because "remove" on every other
+  // screen in Studio means the thing is gone.
+  async function removeDead(email) {
+    if (!window.confirm(
+      `Remove ${email} from the list?\n\n` +
+      `It stays blocked — Studio will never email this address again. ` +
+      `This only clears it off the screen.`
+    )) return;
+    setDeadBusy(true);
+    try {
+      const r = await fetch('/api/keepwarm/dead/hide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!r.ok) throw new Error('remove failed');
+      await loadDead(search);
+      await loadOverview();
+    } catch (err) {
+      setError('Could not remove that address: ' + err.message);
+    } finally {
+      setDeadBusy(false);
+    }
+  }
+
+  async function removeAllDead() {
+    const n = dead?.total || 0;
+    if (!n) return;
+    if (!window.confirm(
+      `Remove all ${n} dead ${n === 1 ? 'address' : 'addresses'} from the list?\n\n` +
+      `They stay blocked — Studio will never email them again. ` +
+      `This only clears the screen.`
+    )) return;
+    setDeadBusy(true);
+    try {
+      const r = await fetch('/api/keepwarm/dead/hide-all', { method: 'POST' });
+      if (!r.ok) throw new Error('remove failed');
+      await loadDead(search);
+      await loadOverview();
+    } catch (err) {
+      setError('Could not clear the list: ' + err.message);
+    } finally {
+      setDeadBusy(false);
+    }
+  }
 
   async function toggleStage(key) {
     if (!overview) return;
@@ -1402,7 +1510,8 @@ export default function KeepWarm() {
               </div>
               <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>
                 would receive the next email. {overview.excludedCount} excluded
-                {overview.suppressedCount > 0 ? `, of which ${overview.suppressedCount} have unsubscribed` : ''}.
+                {overview.suppressedCount > 0 ? `, of which ${overview.suppressedCount} have unsubscribed` : ''}
+                {overview.deadInAudience > 0 ? ` and ${overview.deadInAudience} bounced` : ''}.
               </div>
 
               <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>
@@ -1445,6 +1554,9 @@ export default function KeepWarm() {
                     <Button tone={listMode === 'excluded' ? 'primary' : 'plain'} onClick={() => setListMode('excluded')}>
                       Excluded{audience ? ` (${audience.excludedCount})` : ''}
                     </Button>
+                    <Button tone={listMode === 'dead' ? 'primary' : 'plain'} onClick={() => setListMode('dead')}>
+                      Dead{overview.deadCount ? ` (${overview.deadCount})` : ''}
+                    </Button>
                     {listMode === 'included' && (
                       <>
                         <Button onClick={selectAll}>Select all</Button>
@@ -1465,6 +1577,16 @@ export default function KeepWarm() {
                     </div>
                   )}
 
+                  {listMode === 'dead' && (
+                    <div style={{ fontSize: 12, color: DANGER, background: DANGER_BG, border: `1px solid ${DANGER}`,
+                                  borderRadius: 7, padding: '8px 11px', marginBottom: 10, lineHeight: 1.5 }}>
+                      These addresses rejected mail permanently. They are already out of the loop and
+                      Studio will not email them again. Removing one only clears it off this screen —
+                      it stays blocked. Their send history is untouched, so you can still see what that
+                      company was sent.
+                    </div>
+                  )}
+
                   <input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
@@ -1474,25 +1596,50 @@ export default function KeepWarm() {
                       border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', marginBottom: 10,
                     }}
                   />
-                  <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
-                    {(audience?.rows || []).map(r => (
-                      <AudienceRow
-                        key={r.email}
-                        row={r}
-                        selectable={listMode === 'included'}
-                        checked={isChecked(r.email)}
-                        onToggle={toggleOne}
-                      />
-                    ))}
-                    {audience && audience.rows.length === 0 && (
-                      <div style={{ padding: '16px 12px', fontSize: 13, color: MUTED }}>Nobody matches.</div>
-                    )}
-                  </div>
-                  {audience?.truncated && (
-                    <div style={{ fontSize: 12, color: TERTIARY, marginTop: 6 }}>
-                      Showing the first 1,000 — narrow the search to find someone specific.
+                  {listMode === 'dead' ? (<>
+                    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
+                      {(dead?.rows || []).map(r => (
+                        <DeadRow key={r.email} row={r} onRemove={removeDead} busy={deadBusy} />
+                      ))}
+                      {dead && dead.rows.length === 0 && (
+                        <div style={{ padding: '16px 12px', fontSize: 13, color: MUTED }}>
+                          {search ? 'Nobody matches.' : 'No dead addresses. Nothing has bounced permanently.'}
+                        </div>
+                      )}
                     </div>
-                  )}
+                    {dead?.truncated && (
+                      <div style={{ fontSize: 12, color: TERTIARY, marginTop: 6 }}>
+                        Showing the first 500 — narrow the search to find one.
+                      </div>
+                    )}
+                    {dead && dead.rows.length > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+                        <Button tone="plain" disabled={deadBusy} onClick={removeAllDead}>
+                          {deadBusy ? 'Working…' : `Remove all ${dead.total}`}
+                        </Button>
+                      </div>
+                    )}
+                  </>) : (<>
+                    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
+                      {(audience?.rows || []).map(r => (
+                        <AudienceRow
+                          key={r.email}
+                          row={r}
+                          selectable={listMode === 'included'}
+                          checked={isChecked(r.email)}
+                          onToggle={toggleOne}
+                        />
+                      ))}
+                      {audience && audience.rows.length === 0 && (
+                        <div style={{ padding: '16px 12px', fontSize: 13, color: MUTED }}>Nobody matches.</div>
+                      )}
+                    </div>
+                    {audience?.truncated && (
+                      <div style={{ fontSize: 12, color: TERTIARY, marginTop: 6 }}>
+                        Showing the first 1,000 — narrow the search to find someone specific.
+                      </div>
+                    )}
+                  </>)}
                 </div>
               )}
             </Card>

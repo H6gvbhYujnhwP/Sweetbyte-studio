@@ -21,6 +21,7 @@
  */
 
 import { processDue } from './keepwarm-sender.js';
+import { reconcileBounces } from './bounce-store.js';
 
 const TICK_INTERVAL_MS = 30 * 1000;
 
@@ -52,6 +53,21 @@ async function tick() {
   if (isTicking) return;
   isTicking = true;
   try {
+    // Bounce notifications first, and outside the send results. Two reasons it
+    // rides on this ticker rather than getting one of its own: an address that
+    // died since the last pass should be off the list before the next send
+    // claims it, and the query is one indexed rowid scan that matches nothing
+    // almost every time.
+    //
+    // The first pass after a deploy has a cursor of zero, so it walks the whole
+    // notification log — that is the backfill of every bounce from before this
+    // existed, with no special case to get wrong.
+    try {
+      reconcileBounces();
+    } catch (err) {
+      console.error('[keepwarm] bounce reconcile failed:', err && err.message);
+    }
+
     const results = await processDue();
     if (results.runs) {
       console.log('[keepwarm] tick:', JSON.stringify(results));

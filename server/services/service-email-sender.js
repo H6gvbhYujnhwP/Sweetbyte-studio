@@ -36,6 +36,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
+import { isDead } from './bounce-store.js';
 import {
   renderServiceEmail,
   buildSubject,
@@ -287,10 +288,26 @@ export function unsubUrlFor(email) {
  * platform — `contact_unsubscribed_all` is keyed per email_client, and we
  * deliberately ignore that scoping on read. Someone who told one part of the
  * business to stop should not hear from another part of it.
+ *
+ * A DEAD ADDRESS COUNTS AS SUPPRESSED TOO. Not because the person asked us to
+ * stop, but because the mailbox rejected us permanently and sending again
+ * cannot succeed — it can only push the bounce rate that decides whether the
+ * sending domain stays trusted. This check sits here rather than at each send
+ * site on purpose: every path in Studio that sends anything already runs
+ * through this one function (service emails at queue time and again at send
+ * time, keep-warm per recipient, keep-warm test sends), so a send path added
+ * later cannot forget to check.
+ *
+ * The two reasons stay in separate tables and are reported separately on the
+ * keep-warm screen. Filing a bounce as an unsubscribe would record somebody who
+ * never asked to leave as having opted out, and would inflate the opt-out
+ * figures the operator uses to judge whether the copy is landing badly.
  */
 export function isSuppressed(email) {
   const e = normEmail(email);
   if (!e) return false;
+
+  if (isDead(e)) return true;
 
   const own = db.prepare(
     'SELECT 1 FROM service_email_unsubscribes WHERE email = ?'
