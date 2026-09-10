@@ -72,6 +72,7 @@ db.exec(`
     bounce_subtype      TEXT,
     diagnostic          TEXT,
     soft_count          INTEGER NOT NULL DEFAULT 0,
+    hard_fail           INTEGER NOT NULL DEFAULT 0,
     source              TEXT,
     company_name        TEXT,
     contact_name        TEXT,
@@ -90,6 +91,19 @@ db.exec(`
     value TEXT
   );
 `);
+
+// The table shipped before hard_fail existed, so a database created by the
+// first version needs the column adding. Prints once, on the first boot after
+// this deploy, and never again.
+try {
+  const cols = db.prepare(`PRAGMA table_info(email_dead_addresses)`).all();
+  if (!cols.some(c => c.name === 'hard_fail')) {
+    db.exec(`ALTER TABLE email_dead_addresses ADD COLUMN hard_fail INTEGER NOT NULL DEFAULT 0`);
+    console.log('[bounce] added hard_fail column');
+  }
+} catch (err) {
+  console.error('[bounce] hard_fail migration failed:', err && err.message);
+}
 
 const CURSOR_KEY = 'snsCursorRowid';
 
@@ -110,6 +124,59 @@ function writeCursor(rowid) {
 }
 
 const normEmail = (e) => String(e || '').trim().toLowerCase();
+
+/**
+ * "Is this one of ours?" — has Studio ever sent this address an introduction
+ * email, a follow-up or a keep-warm email?
+ *
+ * WHY THIS EXISTS
+ * The event log carries bounces from the bulk campaigns too, and there are
+ * thousands of them going back years. Those are people Billy has not called
+ * yet. Putting them on the keep-warm screen buries the handful that matter
+ * under fifteen hundred rows of strangers, and none of them belong to this
+ * feature. They are still RECORDED — a mailbox that does not exist does not
+ * start existing because we changed which screen we are looking at — they are
+ * simply not shown, and not blocked, until the address becomes one of ours.
+ */
+const OURS_SQL = `(
+  EXISTS (SELECT 1 FROM service_email_sends WHERE lower(to_email) = email)
+)`;
+
+function isOurs(email) {
+  try {
+    const row = db.prepare(`
+      SELECT 1 FROM service_email_sends WHERE lower(to_email) = ? LIMIT 1
+    `).get(email);
+    if (row) return true;
+  } catch { /* fresh database */ }
+  try {
+    const row = db.prepare(`
+      SELECT 1 FROM keepwarm_recipients WHERE lower(email) = ? LIMIT 1
+    `).get(email);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A hard fail is the mailbox itself being gone — it does not exist, or the
+ * domain does not — or the person having reported us for spam. Those stay
+ * blocked whether or not the address is one of ours, because sending to a
+ * mailbox that provably is not there can only produce another bounce.
+ *
+ * Everything else — a filter rejecting our sending address, an entry on the
+ * SES account suppression list, three temporary failures in a row — is about
+ * the message or the sender rather than the mailbox. Those do NOT block an
+ * address that has never had one of our emails: the person may be perfectly
+ * reachable, and silently refusing Billy's introduction email to somebody he
+ * has just spoken to is a worse failure than one bounce.
+ */
+function isHard(reason, subType, bounceType) {
+  if (bounceType === 'Complaint') return true;
+  if (subType === 'NoEmail') return true;
+  return reason === 'Mailbox does not exist' || reason === 'Domain not found';
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reading
@@ -132,9 +199,10 @@ export function isDead(email) {
   if (!e) return false;
   try {
     const row = db.prepare(
-      'SELECT 1 FROM email_dead_addresses WHERE email = ? AND dead = 1'
+      'SELECT hard_fail FROM email_dead_addresses WHERE email = ? AND dead = 1'
     ).get(e);
-    return !!row;
+    if (!row) return false;
+    return row.hard_fail === 1 || isOurs(e);
   } catch {
     return false;
   }
@@ -148,9 +216,11 @@ export function isDead(email) {
  * merely full on Tuesday.
  */
 export function listDead({ q = '', includeHidden = false, limit = 1000 } = {}) {
+  // Scoped to addresses Studio itself has emailed. See OURS_SQL above — the
+  // campaign bounces stay in the table, they just are not this screen's job.
   const where = includeHidden
-    ? 'WHERE dead = 1'
-    : 'WHERE dead = 1 AND hidden_at IS NULL';
+    ? `WHERE dead = 1 AND ${OURS_SQL}`
+    : `WHERE dead = 1 AND hidden_at IS NULL AND ${OURS_SQL}`;
 
   const rows = db.prepare(`
     SELECT * FROM email_dead_addresses
@@ -196,7 +266,11 @@ export function deadReasonFor(email) {
     const row = db.prepare(
       'SELECT reason FROM email_dead_addresses WHERE email = ? AND dead = 1'
     ).get(e);
-    return row ? (row.reason || 'Rejected') : null;
+    if (!row) return null;
+    // Same rule as isDead: an address nobody has emailed from this side is not
+    // this screen's business, so it is not shown as excluded either.
+    if (!isOurs(e)) return null;
+    return row.reason || 'Rejected';
   } catch {
     return null;
   }
@@ -205,7 +279,8 @@ export function deadReasonFor(email) {
 export function deadCount() {
   try {
     const row = db.prepare(
-      'SELECT COUNT(*) AS n FROM email_dead_addresses WHERE dead = 1 AND hidden_at IS NULL'
+      `SELECT COUNT(*) AS n FROM email_dead_addresses
+        WHERE dead = 1 AND hidden_at IS NULL AND ${OURS_SQL}`
     ).get();
     return row?.n || 0;
   } catch {
@@ -357,6 +432,8 @@ function record({ email, permanent, reason, bounceType, subType, diagnostic, mes
   const e = normEmail(email);
   if (!e) return null;
 
+  const hard = permanent && isHard(reason, subType, bounceType) ? 1 : 0;
+
   const existing = db.prepare('SELECT * FROM email_dead_addresses WHERE email = ?').get(e);
 
   if (!existing) {
@@ -364,8 +441,8 @@ function record({ email, permanent, reason, bounceType, subType, diagnostic, mes
     db.prepare(`
       INSERT INTO email_dead_addresses
         (email, dead, reason, bounce_type, bounce_subtype, diagnostic, soft_count,
-         source, company_name, contact_name, external_company_id, message_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         hard_fail, source, company_name, contact_name, external_company_id, message_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       e,
       permanent ? 1 : 0,
@@ -374,6 +451,7 @@ function record({ email, permanent, reason, bounceType, subType, diagnostic, mes
       subType || null,
       diagnostic ? String(diagnostic).slice(0, 500) : null,
       permanent ? 0 : 1,
+      hard,
       who.source,
       who.companyName,
       who.contactName,
@@ -398,6 +476,7 @@ function record({ email, permanent, reason, bounceType, subType, diagnostic, mes
     UPDATE email_dead_addresses
        SET dead           = ?,
            soft_count     = ?,
+           hard_fail      = MAX(hard_fail, ?),
            last_seen_at   = datetime('now'),
            reason         = CASE WHEN ? = 1 AND dead = 0 THEN ? ELSE reason END,
            bounce_type    = COALESCE(?, bounce_type),
@@ -408,6 +487,7 @@ function record({ email, permanent, reason, bounceType, subType, diagnostic, mes
   `).run(
     nowDead ? 1 : 0,
     softCount,
+    hard,
     nowDead ? 1 : 0,
     shownReason,
     bounceType || null,
