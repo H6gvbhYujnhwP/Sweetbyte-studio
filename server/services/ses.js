@@ -118,7 +118,7 @@ function extractMessageId(xml) {
 // what it always was (multipart/alternative at the top level), so campaign and
 // portal sends are completely unaffected. When present, the message becomes
 // multipart/mixed wrapping the existing multipart/alternative, per RFC 2046.
-function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, htmlBody, plainBody, listUnsubUrl, inReplyTo, references, attachments = [] }) {
+function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, htmlBody, plainBody, listUnsubUrl, inReplyTo, references, attachments = [], inlineImages = [] }) {
   const boundary   = `b_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const toAddress  = toName ? `${toName} <${to}>` : to;
   const plain      = plainBody || htmlToPlain(htmlBody);
@@ -200,11 +200,24 @@ function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, 
   const hasFiles = files.length > 0;
   const mixedBoundary = `m_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-  headers.push(
-    hasFiles
-      ? `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`
-      : `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  // Pictures that appear INSIDE the body rather than as attachments — the email
+  // signature's logo and icons. Each one is a part of a multipart/related
+  // block carrying a Content-ID, and the HTML refers to it as cid:<that id>.
+  //
+  // Why this exists at all: Outlook blocks remote images by default on mail
+  // from outside the recipient's own organisation, so a signature whose logo
+  // lives at a URL arrives as a row of "click to download" placeholders. A
+  // picture that travelled with the message has nothing to download, so it
+  // always displays. It is also what Outlook itself does with a local
+  // signature, which is why one made in Outlook always looks right.
+  //
+  // Defaults to empty, so every existing caller produces a byte-identical
+  // message to before this parameter existed. Verified, not assumed.
+  const images = (Array.isArray(inlineImages) ? inlineImages : []).filter(
+    i => i && i.cid && i.content && i.content.length,
   );
+  const hasImages = images.length > 0;
+  const relatedBoundary = `r_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
   // Encode bodies as base64 with hard line wraps at 76 chars (RFC 2045).
   // Previously declared quoted-printable but didn't actually QP-encode, which
@@ -232,9 +245,51 @@ function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, 
     `--${boundary}--`,
   ];
 
+  // The image parts, and the multipart/related block that wraps the text
+  // alternative together with them.
+  const imageParts = images.flatMap((i) => {
+    const b64 = i.content.toString('base64').replace(/(.{76})/g, '$1\r\n');
+    return [
+      `--${relatedBoundary}`,
+      `Content-Type: ${i.contentType || 'application/octet-stream'}`,
+      `Content-Transfer-Encoding: base64`,
+      `Content-ID: <${i.cid}>`,
+      // inline, not attachment: this is what stops Gmail and Outlook listing
+      // the logo at the bottom of the email as a file the reader can open.
+      `Content-Disposition: inline; filename="${i.filename || i.cid}"`,
+      ``,
+      b64,
+      ``,
+    ];
+  });
+
+  // What sits inside the mixed wrapper, or is the whole message when there are
+  // no attachments. Without images it is the plain/html alternative exactly as
+  // before; with them, that alternative one level deeper inside a related block.
+  const inner = hasImages
+    ? {
+        contentType: `multipart/related; type="multipart/alternative"; boundary="${relatedBoundary}"`,
+        body: [
+          `--${relatedBoundary}`,
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          ``,
+          ...alternative,
+          ``,
+          ...imageParts,
+          `--${relatedBoundary}--`,
+        ],
+      }
+    : {
+        contentType: `multipart/alternative; boundary="${boundary}"`,
+        body: alternative,
+      };
+
   if (!hasFiles) {
-    return [...headers, ``, ...alternative].join('\r\n');
+    headers.push(`Content-Type: ${inner.contentType}`);
+    return [...headers, ``, ...inner.body].join('\r\n');
   }
+
+  headers.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`);
 
   const fileParts = files.flatMap((f) => {
     // RFC 2045 caps encoded lines at 76 chars. A 4MB PDF is ~5.6MB encoded, so
@@ -265,9 +320,9 @@ function buildRawEmail({ to, toName, cc, fromName, fromEmail, replyTo, subject, 
     ...headers,
     ``,
     `--${mixedBoundary}`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: ${inner.contentType}`,
     ``,
-    ...alternative,
+    ...inner.body,
     ``,
     ...fileParts,
     `--${mixedBoundary}--`,
@@ -288,7 +343,7 @@ export async function sendEmail({
   to, toName, cc = null, fromName, fromEmail, replyTo, subject, htmlBody, plainBody,
   campaignId, subscriberId, baseUrl,
   track_opens = false, track_clicks = false, track_unsub = false,
-  inReplyTo = null, references = null, attachments = [],
+  inReplyTo = null, references = null, attachments = [], inlineImages = [],
 }) {
   let finalHtml = htmlBody;
   let listUnsubUrl = null;
@@ -309,7 +364,7 @@ export async function sendEmail({
   const raw = buildRawEmail({
     to, toName, cc, fromName, fromEmail, replyTo, subject,
     htmlBody: finalHtml, plainBody, listUnsubUrl,
-    inReplyTo, references, attachments,
+    inReplyTo, references, attachments, inlineImages,
   });
 
   const xml = await sesRequest({

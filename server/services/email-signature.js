@@ -1,5 +1,6 @@
 /**
- * server/services/email-signature.js — the one email signature.
+ * server/services/email-signature.js — the one email signature, and the one
+ * legal disclaimer.
  *
  * WHY THIS FILE EXISTS
  * There were two signatures: signatureHtml() in keepwarm-generator.js and
@@ -18,24 +19,38 @@
  * because a background colour is the one thing Word's renderer never gets
  * wrong.
  *
- * NINE IMAGES, ALL OF THEM OPTIONAL
- * The wordmark, the Facebook icon and the five icons down the detail lines are
- * hosted by Studio and requested by the recipient's mail client. Business
- * Outlook blocks remote images until the reader clicks "show images", so every
- * one carries alt text that reads as a word — Phone, Email, Web, Address,
- * Registered — rather than leaving a row of empty boxes. The signature is
- * readable with every image blocked. That was the test it had to pass.
+ * THE PICTURES TRAVEL WITH THE EMAIL
+ * This was built first with the images hosted at Studio's own address, and the
+ * first real test proved why that does not work: Outlook blocks remote images
+ * by default on anything arriving from outside the recipient's organisation, so
+ * the signature landed as a row of "click here to download" placeholders. Most
+ * of the people being emailed are on business Outlook and most of them will
+ * never click it.
  *
- * Consequence accepted when this was agreed: each image load hits Studio's
- * server and lands in the log, which is open tracking arriving through the back
- * door. There is no report built on it and none intended.
+ * So the seven pictures are now embedded in the message. Each is a MIME part
+ * with a Content-ID and the HTML refers to it as cid:<that id>. There is
+ * nothing to fetch, so nothing to block — which is exactly why a signature
+ * built inside Outlook always looks right. Three things follow from the change,
+ * all of them improvements:
  *
- * THE IMAGE HOST
- * The images live in public/ and are served from the same origin as the
- * unsubscribe links, so the source of every email carries the onrender.com
- * hostname under the Sweetbyte name. Same problem as the unsubscribe link and
- * the same fix — point studio.sweetbyte.co.uk at Render and set PUBLIC_URL.
- * Nothing here needs changing when that happens.
+ *   - No image request reaches Studio's server, so the accidental
+ *     open-tracking-by-the-back-door that was raised and accepted when this was
+ *     hosted no longer exists. There is nothing in the log to read.
+ *   - The onrender.com hostname no longer appears in the source of an email
+ *     sent under the Sweetbyte name.
+ *   - The whole set is under 6KB, so it costs nothing per send.
+ *
+ * Alt text is still on every picture, and still reads as a word rather than a
+ * gap. Embedded images display in every mail client worth naming, but the
+ * signature has to survive one that does not.
+ *
+ * WEB VERSION STILL EXISTS
+ * cid: means nothing in a browser, so the on-screen preview on the Drafts and
+ * Schedule tabs would show broken pictures. `inline` therefore defaults to
+ * FALSE — hosted URLs, correct in a browser — and the two send paths opt in.
+ * That way the preview kept working without a single change to the API routes,
+ * and a send path that forgets to opt in produces a slightly worse email rather
+ * than a broken one.
  *
  * NOT DRIVEN BY AN ENV VAR
  * Hardcoded to Billy, for the reason both of the old copies gave: a job title,
@@ -43,7 +58,12 @@
  * Joe or Lewis ever send these, this file gets edited.
  */
 
-// The origin the images are fetched from. Same fallback as
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// The origin the hosted copies are fetched from, for the on-screen preview and
+// for any picture that failed to load off disk. Same fallback as
 // service-email-sender.js deliberately: one of them being set and the other not
 // would mean an email whose unsubscribe link and whose logo point at different
 // hosts, which is worse than both being wrong in the same way.
@@ -65,14 +85,95 @@ const RULE  = '#d5d9de'; // the vertical rule
 
 const FACEBOOK_URL = 'https://www.facebook.com/SweetbyteIT/';
 
+// ── The pictures ─────────────────────────────────────────────────────────────
+//
+// Read off disk once at module load. They change between deploys, never between
+// sends, and re-reading them per email would be seven disk hits per recipient
+// for no benefit.
+//
+// A missing file is NOT fatal, unlike the company RAG in keepwarm-generator.js.
+// The difference: generating copy with no company knowledge produces confident
+// wrong text over Billy's name, whereas a signature short one icon is still a
+// correct email. So a file that will not read is shouted about in the log at
+// boot and that picture falls back to its hosted URL — which is what it did
+// before this change, and still works after one click. Silence would be the
+// problem; a loud line in the log and a working email is not.
+const PUBLIC_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'public',
+);
+
+const IMAGE_FILES = [
+  'sig-sweetbyte.png',
+  'sig-facebook.png',
+  'sig-phone.png',
+  'sig-email.png',
+  'sig-web.png',
+  'sig-address.png',
+  'sig-reg.png',
+];
+
+const LOADED = new Map(); // filename -> Buffer
+
+for (const file of IMAGE_FILES) {
+  try {
+    LOADED.set(file, fs.readFileSync(path.join(PUBLIC_DIR, file)));
+  } catch (err) {
+    console.error(
+      `[signature] MISSING ${path.join('public', file)} — it will be requested over the web instead, ` +
+      `which Outlook blocks by default. ${err.message}`,
+    );
+  }
+}
+
+const totalBytes = [...LOADED.values()].reduce((n, b) => n + b.length, 0);
+console.log(
+  `[signature] ${LOADED.size}/${IMAGE_FILES.length} pictures embedded (${Math.round(totalBytes / 1024)}KB per email)`,
+);
+
+// A Content-ID per picture. Derived from the filename so the two can never
+// disagree, and prefixed so it cannot collide with anything else in a message.
+function cidFor(file) {
+  return `sb-${file.replace(/\.png$/, '')}`;
+}
+
+/**
+ * The pictures, in the shape sendEmail() wants for `inlineImages`.
+ *
+ * Only ones that actually loaded — a send must not carry an empty part, and
+ * signatureHtml() points the same picture at its hosted URL in that case, so
+ * the two stay in step without either having to ask the other.
+ */
+export function signatureImages() {
+  return IMAGE_FILES
+    .filter(f => LOADED.has(f))
+    .map(f => ({
+      cid:         cidFor(f),
+      filename:    f,
+      contentType: 'image/png',
+      content:     LOADED.get(f),
+    }));
+}
+
+// One <img>. Embedded when the send path asked for it and the file is in hand,
+// hosted otherwise.
+function img(file, { inline, width, height, alt, extraStyle = '' }) {
+  const src = (inline && LOADED.has(file))
+    ? `cid:${cidFor(file)}`
+    : `${publicBaseUrl()}/${file}`;
+  return `<img src="${src}" width="${width}" height="${height}" alt="${alt}"`
+    + ` style="display:block;border:0;outline:none;text-decoration:none;${extraStyle}">`;
+}
+
 // One row of the detail block: icon, then text. The icon cell has a fixed width
-// so the text edges line up whether the images loaded or not.
-function detailRow(base, file, alt, html) {
+// so the text edges line up whether the pictures showed or not.
+function detailRow(file, alt, html, inline) {
   return `
       <tr>
         <td width="24" style="width:24px;padding:3px 8px 3px 0;vertical-align:top;">
-          <img src="${base}/${file}" width="14" height="14" alt="${alt}"
-               style="display:block;border:0;outline:none;text-decoration:none;">
+          ${img(file, { inline, width: 14, height: 14, alt })}
         </td>
         <td style="padding:3px 0;vertical-align:top;${FONT}font-size:9pt;color:${MUTED};line-height:1.45;">${html}</td>
       </tr>`;
@@ -116,11 +217,12 @@ export function disclaimerHtml() {
  *        it. True for every current send path. The switch exists because a
  *        future email whose copy already ends in a sign-off should not carry
  *        two.
+ * @param {boolean} [opts.inline=false] Embed the pictures in the message.
+ *        A real send wants true. Defaults to false so the on-screen preview,
+ *        which renders in a browser where cid: means nothing, keeps working.
  * @returns {string} HTML
  */
-export function signatureHtml({ closing = true } = {}) {
-  const base = publicBaseUrl();
-
+export function signatureHtml({ closing = true, inline = false } = {}) {
   const closingLine = closing
     ? `<p style="margin:24px 0 14px;${FONT}font-size:11pt;color:${INK};">Kind regards,</p>`
     : '';
@@ -129,12 +231,10 @@ export function signatureHtml({ closing = true } = {}) {
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="width:560px;border-collapse:collapse;">
   <tr>
     <td width="164" style="width:164px;padding:2px 16px 0 0;vertical-align:top;">
-      <img src="${base}/sig-sweetbyte.png" width="150" height="34" alt="Sweetbyte"
-           style="display:block;border:0;outline:none;text-decoration:none;">
+      ${img('sig-sweetbyte.png', { inline, width: 150, height: 34, alt: 'Sweetbyte' })}
       <div style="margin-top:16px;">
         <a href="${FACEBOOK_URL}" style="text-decoration:none;border:0;">
-          <img src="${base}/sig-facebook.png" width="20" height="20" alt="Facebook"
-               style="display:block;border:0;outline:none;text-decoration:none;">
+          ${img('sig-facebook.png', { inline, width: 20, height: 20, alt: 'Facebook' })}
         </a>
       </div>
     </td>
@@ -153,19 +253,19 @@ export function signatureHtml({ closing = true } = {}) {
       </div>
 
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">${
-        detailRow(base, 'sig-phone.png', 'Phone', '+44 (0) 1702 540776')
+        detailRow('sig-phone.png', 'Phone', '+44 (0) 1702 540776', inline)
       }${
-        detailRow(base, 'sig-email.png', 'Email',
-          `<a href="mailto:Billy@sweetbyte.co.uk" style="color:${MUTED};text-decoration:none;">Billy@sweetbyte.co.uk</a>`)
+        detailRow('sig-email.png', 'Email',
+          `<a href="mailto:Billy@sweetbyte.co.uk" style="color:${MUTED};text-decoration:none;">Billy@sweetbyte.co.uk</a>`, inline)
       }${
-        detailRow(base, 'sig-web.png', 'Web',
-          `<a href="https://www.sweetbyte.co.uk" style="color:${MUTED};text-decoration:none;">www.sweetbyte.co.uk</a>`)
+        detailRow('sig-web.png', 'Web',
+          `<a href="https://www.sweetbyte.co.uk" style="color:${MUTED};text-decoration:none;">www.sweetbyte.co.uk</a>`, inline)
       }${
-        detailRow(base, 'sig-address.png', 'Address',
-          'Sweetbyte Ltd, Lower Barn Farm, London Road, Rayleigh. SS6 9ET.')
+        detailRow('sig-address.png', 'Address',
+          'Sweetbyte Ltd, Lower Barn Farm, London Road, Rayleigh. SS6 9ET.', inline)
       }${
-        detailRow(base, 'sig-reg.png', 'Registered',
-          'Company Reg: 09949224&nbsp; |&nbsp; Reg Office: 16-18 West St, Rochford, SS4 1AJ<br>VAT Number: 338 6626 71')
+        detailRow('sig-reg.png', 'Registered',
+          'Company Reg: 09949224&nbsp; |&nbsp; Reg Office: 16-18 West St, Rochford, SS4 1AJ<br>VAT Number: 338 6626 71', inline)
       }
       </table>
     </td>

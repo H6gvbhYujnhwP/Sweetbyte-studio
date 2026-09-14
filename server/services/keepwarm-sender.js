@@ -50,6 +50,7 @@ import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
 import { buildAudience, getDraft } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
+import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay } from './keepwarm-reminders.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -394,6 +395,10 @@ export async function sendTest({ draftId, toEmail }) {
     bodyHtml:  draft.html_body,
     unsubUrl:  unsubUrlFor(email),
     firstName: null,
+    // The signature's pictures travel inside the message. Outlook blocks
+    // remote images on mail from outside the recipient's organisation, so a
+    // hosted logo arrives as a placeholder nobody clicks.
+    inline:    true,
   });
 
   try {
@@ -407,6 +412,7 @@ export async function sendTest({ draftId, toEmail }) {
       subject:   `[TEST] ${draft.subject}`,
       htmlBody:  html,
       plainBody: htmlToText(html),
+      inlineImages: signatureImages(),
     });
     console.log(`[keepwarm] test of draft ${draftId} sent to ${email}`);
     return { ok: true, messageId: messageId || null };
@@ -534,6 +540,8 @@ async function sendRun(run) {
         const html = renderEmailHtml({
           bodyHtml:  run.html_body,
           unsubUrl:  unsubUrlFor(r.email),
+          // Pictures embedded, exactly as in the test send above.
+          inline:    true,
           // The greeting stored when the run was frozen. Older rows have none,
           // so they fall back to the contact name the way they always did.
           firstName: r.greeting || firstNameOf(r.contact_name),
@@ -551,6 +559,7 @@ async function sendRun(run) {
           subject:   run.subject,
           htmlBody:  html,
           plainBody: htmlToText(html),
+          inlineImages: signatureImages(),
         });
 
         markSent.run(messageId || null, r.id);

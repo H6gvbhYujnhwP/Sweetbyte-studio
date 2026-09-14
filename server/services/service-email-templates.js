@@ -329,6 +329,12 @@ export function buildSubject(serviceKeys, step, { companyName, contactName, send
  *
  * `unsubUrl` is required: these go to people who have not opted in, so there is
  * always a working opt-out.
+ *
+ * `inline` embeds the signature's pictures in the message rather than pointing
+ * at hosted copies, which Outlook blocks by default on mail from outside the
+ * recipient's organisation. The sender passes true. It defaults to false so
+ * that anything rendering this for a screen still gets pictures a browser can
+ * fetch.
  */
 export function renderServiceEmail({
   serviceKeys,
@@ -339,6 +345,7 @@ export function renderServiceEmail({
   spokeTo,
   senderName,
   unsubUrl,
+  inline = false,
 }) {
   const vars = buildVars({ companyName, contactName, referrerName, senderName });
 
@@ -385,7 +392,7 @@ export function renderServiceEmail({
   // applyTokens the way the old copy did — there is nothing in it to fill in.
   return [
     body,
-    signatureHtml(),
+    signatureHtml({ inline }),
     footer,
   ].join('\n');
 }

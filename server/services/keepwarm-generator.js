@@ -97,11 +97,16 @@ const P_STYLE = `margin:0 0 1em;${FONT}`;
  * building. Two renderers is how an email gets approved in one wording and
  * delivered in another.
  *
+ * `inline` embeds the signature's pictures in the message rather than pointing
+ * at hosted copies. A real send passes true; it defaults to false so the
+ * on-screen preview, which renders in a browser where cid: means nothing, keeps
+ * showing the pictures.
+ *
  * `unsubUrl` is optional only so the preview can render before an address is
  * known. A send must always pass one — an unsubscribe link is not decoration
  * on a repeat marketing email, it is the thing that makes sending it lawful.
  */
-export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null }) {
+export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, inline = false }) {
   const greeting = `<p style="${P_STYLE}">Hi ${firstName || 'there'},</p>`;
 
   const optOut = unsubUrl
@@ -117,7 +122,7 @@ export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null })
   return `<div style="max-width:600px;${FONT}color:#222;">
 ${greeting}
 ${bodyHtml}
-${signatureHtml()}
+${signatureHtml({ inline })}
 ${optOut}
 ${disclaimerHtml()}
 </div>`;

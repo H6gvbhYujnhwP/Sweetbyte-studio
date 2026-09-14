@@ -44,6 +44,7 @@ import {
   normaliseSpokeTo,
   FOLLOWUP_READY,
 } from './service-email-templates.js';
+import { signatureImages } from './email-signature.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -610,6 +611,11 @@ export async function processDue() {
         spokeTo: row.spoke_to,
         senderName: SENDER_NAME,
         unsubUrl: unsubUrlFor(row.to_email),
+        // The signature's pictures travel inside the message rather than being
+        // fetched from Studio. Outlook blocks remote images by default on mail
+        // from outside the recipient's organisation, and these go to people who
+        // have never heard from us before.
+        inline: true,
       });
 
       // No open/click tracking on these, on purpose. Every message is CC'd, so
@@ -630,6 +636,7 @@ export async function processDue() {
         }),
         htmlBody,
         attachments: BROCHURE ? [BROCHURE] : [],
+        inlineImages: signatureImages(),
       });
 
       db.prepare(`
