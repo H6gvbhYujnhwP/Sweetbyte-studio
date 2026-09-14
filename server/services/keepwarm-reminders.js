@@ -127,6 +127,29 @@ export function sendDaysIn(year, month) {
   return ORDINALS.map(n => all[n - 1]).filter(Boolean);
 }
 
+/**
+ * The calendar rule in words — "1st & 3rd Tuesday".
+ *
+ * Derived from WEEKDAY and ORDINALS rather than typed out, so the words on
+ * screen cannot end up describing a rhythm the code no longer follows. The
+ * Schedule tab used to read "Every 14 days", which stopped being true the day
+ * the rule became 1st and 3rd: the gap from the 3rd Tuesday to the next 1st is
+ * three weeks, not two.
+ */
+export function sendDayLabel() {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const ord = (n) => {
+    const suffix = (n % 100 >= 11 && n % 100 <= 13) ? 'th'
+      : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+    return `${n}${suffix}`;
+  };
+  const list = ORDINALS.map(ord);
+  const joined = list.length > 1
+    ? `${list.slice(0, -1).join(', ')} & ${list[list.length - 1]}`
+    : list[0];
+  return `${joined} ${days[WEEKDAY]}`;
+}
+
 export function isSendDay(ymd) {
   const d = toDate(ymd);
   return sendDaysIn(d.getUTCFullYear(), d.getUTCMonth() + 1).includes(ymd);

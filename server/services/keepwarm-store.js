@@ -118,6 +118,27 @@ try {
   console.error('[keepwarm] deleted_at migration failed:', err.message);
 }
 
+// The deliberate order of the approved queue.
+//
+// Until this existed, the Schedule tab was ordered by the moment you pressed
+// Approve, which is not a decision about running order — it is a side effect of
+// which draft you happened to read first. schedule_position records an order
+// you actually chose.
+//
+// NULL means "no opinion", and sorts after everything numbered, in approval
+// order. That is what every draft approved before this column existed holds,
+// and what a newly approved one holds: it joins the back of the queue, which is
+// exactly what it did before.
+try {
+  const cols = db.prepare(`PRAGMA table_info(keepwarm_drafts)`).all().map(c => c.name);
+  if (!cols.includes('schedule_position')) {
+    db.exec(`ALTER TABLE keepwarm_drafts ADD COLUMN schedule_position INTEGER`);
+    console.log('[keepwarm] added schedule_position column');
+  }
+} catch (err) {
+  console.error('[keepwarm] schedule_position migration failed:', err.message);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -581,17 +602,68 @@ export function updateDraft(id, { subject, html }) {
   return getDraft(id);
 }
 
+/**
+ * How the approved queue is ordered, everywhere.
+ *
+ * Exported as a string rather than written out twice because the Schedule tab
+ * and the up/down arrows have to agree about what "the one above" means. Two
+ * copies of an ORDER BY is how an arrow moves a draft past the wrong neighbour.
+ */
+export const SCHEDULE_ORDER =
+  'COALESCE(schedule_position, 1000000) ASC, COALESCE(approved_at, created_at) ASC';
+
+/**
+ * Move an approved draft one place up or down the schedule.
+ *
+ * Every row in the queue is renumbered on every move, not just the two that
+ * swapped. It is a handful of rows and it means the queue is always fully
+ * numbered afterwards — never a mix of numbered rows and NULLs, which is the
+ * state that makes the next move behave unpredictably.
+ *
+ * The order is read back from the database rather than trusted from the
+ * browser. The screen may have been drawn before a draft was approved, sent or
+ * un-approved somewhere else, and an arrow press is a request to move this
+ * draft relative to what is actually in the queue now.
+ */
+export function moveDraftInSchedule(id, direction) {
+  if (!['up', 'down'].includes(direction)) return { error: 'bad_direction' };
+
+  const ids = db.prepare(`
+    SELECT id FROM keepwarm_drafts
+     WHERE status = 'approved'
+     ORDER BY ${SCHEDULE_ORDER}
+  `).all().map(r => r.id);
+
+  const from = ids.indexOf(id);
+  if (from < 0) return { error: 'not_in_schedule' };
+
+  const to = direction === 'up' ? from - 1 : from + 1;
+  if (to < 0 || to >= ids.length) return { error: 'at_end' };
+
+  [ids[from], ids[to]] = [ids[to], ids[from]];
+
+  const upd = db.prepare('UPDATE keepwarm_drafts SET schedule_position = ? WHERE id = ?');
+  db.transaction(() => ids.forEach((rowId, idx) => upd.run(idx + 1, rowId)))();
+
+  return { ok: true, order: ids };
+}
+
 export function setDraftStatus(id, status) {
   if (!['draft', 'approved', 'rejected'].includes(status)) return { error: 'bad_status' };
   const row = getDraft(id);
   if (!row) return null;
   if (row.status === 'sent') return { error: 'already_sent' };
 
+  // Leaving the approved queue clears the chosen position as well. Otherwise a
+  // draft removed from the schedule and approved again weeks later would jump
+  // back to the slot it used to hold, which is a decision nobody made twice.
   db.prepare(`
     UPDATE keepwarm_drafts
-       SET status = ?, approved_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE NULL END
+       SET status            = ?,
+           approved_at       = CASE WHEN ? = 'approved' THEN datetime('now') ELSE NULL END,
+           schedule_position = CASE WHEN ? = 'approved' THEN schedule_position ELSE NULL END
      WHERE id = ?
-  `).run(status, status, id);
+  `).run(status, status, status, id);
 
   return getDraft(id);
 }

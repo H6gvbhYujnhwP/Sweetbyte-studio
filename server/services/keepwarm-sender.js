@@ -48,10 +48,10 @@ import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
-import { buildAudience, getDraft } from './keepwarm-store.js';
+import { buildAudience, getDraft, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
 import { signatureImages } from './email-signature.js';
-import { londonNow, isSendDay, nextSendDay } from './keepwarm-reminders.js';
+import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -238,6 +238,9 @@ export function nextDueDate() {
 export function cadenceConfig() {
   return {
     cadenceDays:   CADENCE_DAYS,
+    // The calendar rule in words, derived from the calendar itself. The screen
+    // used to say "Every 14 days", which the 1st-and-3rd rule made untrue.
+    calendarLabel: sendDayLabel(),
     undoSeconds:   UNDO_SECONDS,
     maxRecipients: MAX_RECIPIENTS,
     fromConfigured: Boolean(FROM_EMAIL && FROM_NAME),
@@ -625,11 +628,14 @@ export function schedule(limit = 10) {
   const due = nextDueDate();
   const { included } = buildAudience();
 
+  // SCHEDULE_ORDER comes from keepwarm-store.js, which is also what the up/down
+  // arrows sort by. One definition, so an arrow cannot move a draft past a
+  // neighbour the screen was not showing it next to.
   const approved = db.prepare(`
-    SELECT id, subject, created_at, approved_at
+    SELECT id, subject, created_at, approved_at, schedule_position
       FROM keepwarm_drafts
      WHERE status = 'approved'
-     ORDER BY COALESCE(approved_at, created_at) ASC
+     ORDER BY ${SCHEDULE_ORDER}
      LIMIT ?
   `).all(Math.max(1, Math.min(50, limit)));
 
@@ -664,6 +670,12 @@ export function schedule(limit = 10) {
       date:           when.toISOString().slice(0, 10),
       dueNow:         idx === 0 && (!due || Date.parse(due + 'T00:00:00Z') <= Date.now()),
       projectedCount: included.length,
+      // Whether the arrows are pressable. Worked out here rather than in the
+      // browser because the browser only ever sees `limit` rows — with more
+      // approved drafts than that, the last row on screen is not the last row
+      // in the queue, and a greyed-out arrow would be a lie.
+      canMoveUp:      idx > 0,
+      canMoveDown:    idx < approved.length - 1,
     };
   });
 

@@ -629,7 +629,7 @@ function UndoBar({ secondsLeft, count, onUndo, undoing }) {
 
 // ── Schedule ─────────────────────────────────────────────────────────────────
 
-function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle }) {
+function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, onRemove, busy }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -668,6 +668,37 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle }) {
         </div>
       )}
 
+      {/* Reordering and removing. Both are disabled while anything is in flight:
+          the dates come from a row's position in this list, so moving a draft
+          while a send is being queued would change which email the row about to
+          go actually is. */}
+      <div style={{ display: 'flex', gap: 3 }}>
+        <ArrowButton
+          label="Move up"
+          glyph="▲"
+          disabled={busy || !slot.canMoveUp}
+          onClick={() => onMove(slot.draftId, 'up')}
+        />
+        <ArrowButton
+          label="Move down"
+          glyph="▼"
+          disabled={busy || !slot.canMoveDown}
+          onClick={() => onMove(slot.draftId, 'down')}
+        />
+      </div>
+
+      <button
+        onClick={() => onRemove(slot)}
+        disabled={busy}
+        title="Send this back to Drafts, un-approved"
+        style={{
+          fontSize: 13, color: busy ? TERTIARY : DANGER, background: 'none', border: 'none',
+          cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+        }}
+      >
+        Remove
+      </button>
+
       <div style={{ width: 96, textAlign: 'right' }}>
         {canSend
           ? <Button tone="primary" disabled={sending} onClick={() => onSend(slot)}>
@@ -676,6 +707,29 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle }) {
           : <span style={{ fontSize: 12, color: TERTIARY }}>Queued</span>}
       </div>
     </div>
+  );
+}
+
+// A small square arrow. Its own component only so the disabled styling and the
+// accessible label are written once rather than twice.
+function ArrowButton({ label, glyph, disabled, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      style={{
+        width: 24, height: 24, padding: 0, fontSize: 9, lineHeight: 1,
+        fontFamily: 'inherit', background: 'transparent',
+        border: `1px solid ${BORDER}`, borderRadius: 6,
+        color: disabled ? TERTIARY : MUTED,
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'default' : 'pointer',
+      }}
+    >
+      {glyph}
+    </button>
   );
 }
 
@@ -747,7 +801,8 @@ function SlotList({ data, search, onSearch, isChecked, onToggle, onAll, onNone, 
 
 function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch,
                        isChecked, onToggleOne, onAll, onNone, selectedCount, handPicked,
-                       testTo, onTestTo, onTest, testBusy, testNote, testError }) {
+                       testTo, onTestTo, onTest, testBusy, testNote, testError,
+                       onMove, onRemove, slotBusy, slotError }) {
   if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const active = data.activeRun;
@@ -756,6 +811,7 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
   return (
     <>
       {sendError && <Banner tone="bad">{sendError}</Banner>}
+      {slotError && <Banner tone="bad">{slotError}</Banner>}
 
       {running && (
         <Card>
@@ -774,7 +830,7 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0 }}>Next {data.slots.length || ''} sends</h2>
           <div style={{ fontSize: 13, color: MUTED }}>
-            Every {data.config.cadenceDays} days
+            {data.config.calendarLabel || `Every ${data.config.cadenceDays} days`}
             {data.nextDueDate ? ` · next due ${fmtDate(data.nextDueDate)}` : ' · nothing sent yet, so the first is due whenever you are'}
           </div>
         </div>
@@ -808,6 +864,14 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
                   sending={sending}
                   expanded={sendable && listOpen}
                   onToggle={onToggleList}
+                  onMove={onMove}
+                  onRemove={onRemove}
+                  // Reordering and removing are locked while a run is in
+                  // flight, and while one is being queued or moved. The slot
+                  // dates come from position in this list, so a change
+                  // half-way through queueing a send would move the goalposts
+                  // after the decision was made.
+                  busy={Boolean(active) || slotBusy}
                 />
                 {sendable && listOpen && (
                   <SlotList
@@ -1128,6 +1192,12 @@ export default function KeepWarm() {
     } catch { /* ignore */ }
   }, []);
 
+  // Reordering and removing on the Schedule tab. One busy flag for both,
+  // because both change the running order and pressing a second while the
+  // first is in flight would be acting on a list that is about to change.
+  const [slotBusy, setSlotBusy] = useState(false);
+  const [slotError, setSlotError] = useState(null);
+
   const loadSchedule = useCallback(async () => {
     try {
       const r = await fetch('/api/keepwarm/schedule');
@@ -1238,6 +1308,62 @@ export default function KeepWarm() {
       setSendError(err.message);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function moveSlot(draftId, direction) {
+    setSlotBusy(true);
+    setSlotError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${draftId}/schedule-move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(
+        d.error === 'at_end'          ? 'That one is already at the end of the queue.'
+        : d.error === 'not_in_schedule' ? 'That email is no longer in the schedule — the list has been refreshed.'
+        : d.error || 'Could not move it',
+      );
+      await loadSchedule();
+    } catch (err) {
+      setSlotError(err.message);
+      // Whatever went wrong, the list on screen is the suspect. Reload it so
+      // the operator is looking at the real order rather than a stale one.
+      await loadSchedule();
+    } finally {
+      setSlotBusy(false);
+    }
+  }
+
+  async function removeSlot(slot) {
+    if (!window.confirm(
+      `Remove "${slot.subject}" from the schedule?\n\n`
+      + 'It goes back to the Drafts tab un-approved, and everything behind it '
+      + 'moves up a slot. You can approve it again whenever you like.',
+    )) return;
+
+    setSlotBusy(true);
+    setSlotError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${slot.draftId}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'draft' }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error === 'already_sent'
+        ? 'That email has already gone out, so it cannot be removed.'
+        : d.error || 'Could not remove it');
+      // Both lists change: one loses a row, the other gains one back.
+      await loadSchedule();
+      await loadDrafts();
+    } catch (err) {
+      setSlotError(err.message);
+      await loadSchedule();
+    } finally {
+      setSlotBusy(false);
     }
   }
 
@@ -1962,6 +2088,10 @@ export default function KeepWarm() {
                 testBusy={testBusy}
                 testNote={testNote}
                 testError={testError}
+                onMove={moveSlot}
+                onRemove={removeSlot}
+                slotBusy={slotBusy}
+                slotError={slotError}
               />
             </>)}
 

@@ -40,6 +40,7 @@ import {
   getDraft,
   updateDraft,
   setDraftStatus,
+  moveDraftInSchedule,
   emptyBin,
   previousSubjects,
 } from '../services/keepwarm-store.js';
@@ -532,6 +533,31 @@ router.post('/drafts/:id/status', (req, res) => {
     res.json({ draft: result });
   } catch (err) {
     console.error('[keepwarm] set draft status failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /drafts/:id/schedule-move  { direction: 'up' | 'down' }
+ *
+ * Move an approved draft one place up or down the schedule. Removing one from
+ * the schedule is not a route of its own: it is the existing status route with
+ * 'draft', which is the same thing the Un-approve button on the Drafts tab has
+ * always done. A second way to un-approve would be a second thing to keep in
+ * step with the first.
+ *
+ * 409 rather than 400 when it cannot move: "already at the top" and "no longer
+ * in the queue" are both the screen being out of date rather than the request
+ * being malformed, and the screen's own refresh is the fix.
+ */
+router.post('/drafts/:id/schedule-move', (req, res) => {
+  try {
+    const direction = String((req.body || {}).direction || '');
+    const result = moveDraftInSchedule(req.params.id, direction);
+    if (result.error) return res.status(409).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] schedule move failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
