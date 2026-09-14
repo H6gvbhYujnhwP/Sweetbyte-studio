@@ -41,6 +41,9 @@ import {
   updateDraft,
   setDraftStatus,
   moveDraftInSchedule,
+  addManualToLoop,
+  removeManual,
+  listManual,
   emptyBin,
   previousSubjects,
 } from '../services/keepwarm-store.js';
@@ -533,6 +536,56 @@ router.post('/drafts/:id/status', (req, res) => {
     res.json({ draft: result });
   } catch (err) {
     console.error('[keepwarm] set draft status failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /manual  { text }
+ *
+ * Add addresses to the loop by hand. `text` is whatever was pasted in — the
+ * parsing is server-side so the rules live in one place rather than being
+ * reimplemented in the browser and drifting from it.
+ *
+ * Always 200 when the request was well formed, even when nothing was added.
+ * "All nine of those were already in the loop" is a successful answer to the
+ * question asked, not an error, and the screen needs the detail either way.
+ */
+router.post('/manual', (req, res) => {
+  try {
+    const text = String((req.body || {}).text || '');
+    if (!text.trim()) return res.status(400).json({ error: 'nothing_pasted' });
+    res.json(addManualToLoop(text));
+  } catch (err) {
+    console.error('[keepwarm] manual add failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /manual — everyone added by hand. */
+router.get('/manual', (req, res) => {
+  try {
+    res.json({ rows: listManual() });
+  } catch (err) {
+    console.error('[keepwarm] manual list failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /manual/remove  { email }
+ *
+ * Removes the hand-typed row and nothing else. If that address had also been
+ * sent a real introduction email at some point it stays in the loop on the
+ * strength of the send, which is correct — the send is the better evidence.
+ */
+router.post('/manual/remove', (req, res) => {
+  try {
+    const result = removeManual((req.body || {}).email);
+    if (result.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] manual remove failed:', err);
     res.status(500).json({ error: err.message });
   }
 });

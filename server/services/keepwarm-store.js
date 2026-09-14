@@ -118,6 +118,32 @@ try {
   console.error('[keepwarm] deleted_at migration failed:', err.message);
 }
 
+// Addresses put into the loop by hand.
+//
+// The loop is otherwise derived from service_email_sends: to be in it, Studio
+// must have actually sent you an introduction email. That is a good rule and it
+// stays — the alternative considered was writing fake 'sent' rows for people
+// who were never emailed, which would have been a lie in the send history AND
+// would have made Studio refuse to ever send them a real introduction, because
+// queueServiceEmail skips anything already sent. Both are worse than a second
+// table.
+//
+// So these rows say only what is true: somebody typed this address in. They
+// feed the same audience, resolve their stage from WorkTrackr the same way, and
+// the option to send a proper introduction later is untouched.
+//
+// The address is the primary key. Adding the same one twice is a no-op rather
+// than a duplicate, which is what you want when a list gets pasted twice.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS keepwarm_manual (
+    email               TEXT PRIMARY KEY,
+    external_company_id TEXT,
+    company_name        TEXT,
+    contact_name        TEXT,
+    added_at            TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
 // The deliberate order of the approved queue.
 //
 // Until this existed, the Schedule tab was ordered by the moment you pressed
@@ -390,7 +416,8 @@ export function lastStageRefresh() {
  * vanishing without explanation.
  */
 function rawAudience() {
-  return db.prepare(`
+  // Everyone Studio has actually emailed.
+  const sent = db.prepare(`
     SELECT
       lower(s.to_email)        AS email,
       MAX(s.created_at)        AS last_sent_at,
@@ -408,8 +435,37 @@ function rawAudience() {
       AND s.to_email IS NOT NULL
       AND trim(s.to_email) != ''
     GROUP BY lower(s.to_email)
-    ORDER BY MAX(s.created_at) DESC
   `).all();
+
+  // Everyone typed in by hand. Same shape, same stage lookup, so project() and
+  // everything downstream cannot tell the difference except where it matters.
+  const manual = db.prepare(`
+    SELECT
+      lower(m.email)           AS email,
+      NULL                     AS last_sent_at,
+      m.added_at               AS added_at,
+      m.external_company_id    AS external_company_id,
+      m.company_name           AS sent_company_name,
+      m.contact_name           AS contact_name,
+      NULL                     AS referrer_name,
+      k.company_name           AS live_company_name,
+      k.primary_contact        AS primary_contact,
+      k.stage                  AS stage
+    FROM keepwarm_manual m
+    LEFT JOIN keepwarm_stages k
+      ON k.external_company_id = m.external_company_id
+  `).all();
+
+  // A real send wins over a hand-typed row for the same address. That happens
+  // the day somebody added by hand is finally sent a proper introduction: from
+  // then on the send record is the truth about them, and the row stops being
+  // marked as added by hand.
+  const byEmail = new Map();
+  for (const row of manual) byEmail.set(row.email, row);
+  for (const row of sent)   byEmail.set(row.email, { ...(byEmail.get(row.email) || {}), ...row });
+
+  return [...byEmail.values()].sort((a, b) =>
+    String(b.last_sent_at || b.added_at || '').localeCompare(String(a.last_sent_at || a.added_at || '')));
 }
 
 function project(row) {
@@ -428,6 +484,11 @@ function project(row) {
     stage:             row.stage || null,
     stageLabel:        row.stage ? (STAGE_LABELS[row.stage] || row.stage) : 'No stage',
     lastSentAt:        row.last_sent_at || null,
+    // Never emailed by Studio, so there is no send history behind them. Shown
+    // on screen because "why has this person had nothing from us?" is a fair
+    // question to be able to answer from the list.
+    addedByHand:       !row.last_sent_at,
+    addedAt:           row.added_at || null,
   };
 }
 
@@ -600,6 +661,147 @@ export function updateDraft(id, { subject, html }) {
   `).run(subject ?? null, html ?? null, id);
 
   return getDraft(id);
+}
+
+/**
+ * Parse a pasted block into rows, and say what could not be read.
+ *
+ * The paste is deliberately forgiving about column order, because the realistic
+ * input is a copy out of a spreadsheet or a list typed by hand, and a format
+ * that has to be exactly right is a format that gets pasted wrongly.
+ *
+ * Per line: the token containing an @ is the address, a token shaped like a
+ * WorkTrackr id is the company id, and whatever is left over is read as company
+ * name then contact name. Tabs, commas and runs of spaces all separate.
+ *
+ * An address on its own is accepted. It goes in with no company id, which means
+ * no sales stage — and no stage means excluded from the loop unless the "No
+ * stage set" chip is ticked. Refusing the line outright would be unhelpful, and
+ * accepting it silently would leave somebody wondering where they went, so the
+ * count comes back separately for the screen to warn about.
+ */
+export function parseManualPaste(text) {
+  const UUIDISH  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const EMAILISH = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+  const rows = [];
+  const unreadable = [];
+
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // Tabs, commas, semicolons and runs of two or more spaces are treated as
+    // column separators, which covers a paste out of a spreadsheet and a list
+    // typed by hand.
+    const columns = line.split(/\t|,|;|\s{2,}/).map(t => t.trim()).filter(Boolean);
+
+    // A line with no separators at all — "Anna Smith anna@sentek.co.uk". The
+    // address is still findable, but which of the loose words is a company and
+    // which is a person is a guess, and guessing wrong means greeting somebody
+    // as "Hi Leigh," when Leigh is half the company name. So an undelimited
+    // line gives up its addresses and nothing else.
+    const delimited = columns.length > 1;
+    const tokens = delimited ? columns : line.split(/\s+/);
+
+    const emails = tokens.filter(t => EMAILISH.test(t)).map(t => t.toLowerCase());
+    if (!emails.length) { unreadable.push(line.slice(0, 120)); continue; }
+
+    const companyId = tokens.find(t => UUIDISH.test(t)) || null;
+    const words = delimited
+      ? tokens.filter(t => !EMAILISH.test(t) && !UUIDISH.test(t))
+      : [];
+
+    // More than one address on a line is read as several people at the same
+    // company, which is what it means in practice when two addresses get
+    // written down side by side.
+    for (const email of emails) {
+      rows.push({
+        email,
+        companyId,
+        companyName: words[0] || null,
+        contactName: words[1] || null,
+      });
+    }
+  }
+  return { rows, unreadable };
+}
+
+/**
+ * Add addresses to the loop by hand.
+ *
+ * Every reason for skipping is reported rather than counted, because "23 added,
+ * 9 skipped" invites the question which nine, and the answer matters: already
+ * in the loop is fine, unsubscribed is a legal position, and bounced means the
+ * address is dead and the row would have been pointless.
+ *
+ * Checked against Studio's own records, not against whatever list the paste
+ * came from. That is the whole point of doing it here.
+ */
+export function addManualToLoop(text) {
+  const { rows, unreadable } = parseManualPaste(text);
+
+  const hasSend = db.prepare(`
+    SELECT 1 FROM service_email_sends
+     WHERE lower(to_email) = ? AND status = 'sent' LIMIT 1
+  `);
+  const hasManual = db.prepare('SELECT 1 FROM keepwarm_manual WHERE email = ?');
+  const insert = db.prepare(`
+    INSERT INTO keepwarm_manual (email, external_company_id, company_name, contact_name)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  const added = [];
+  const skipped = [];
+  const seen = new Set();
+
+  const run = db.transaction(() => {
+    for (const r of rows) {
+      if (seen.has(r.email)) { skipped.push({ ...r, reason: 'listed twice in the paste' }); continue; }
+      seen.add(r.email);
+
+      const deadWhy = deadReasonFor(r.email);
+      if (deadWhy)                  { skipped.push({ ...r, reason: `bounced — ${deadWhy.toLowerCase()}` }); continue; }
+      if (isSuppressed(r.email))    { skipped.push({ ...r, reason: 'unsubscribed' }); continue; }
+      if (hasSend.get(r.email))     { skipped.push({ ...r, reason: 'already in the loop' }); continue; }
+      if (hasManual.get(r.email))   { skipped.push({ ...r, reason: 'already added by hand' }); continue; }
+
+      insert.run(r.email, r.companyId, r.companyName, r.contactName);
+      added.push(r);
+    }
+  });
+  run();
+
+  return {
+    added:      added.length,
+    skipped,
+    unreadable,
+    // Added, but with no company id, so no sales stage. The screen warns about
+    // these because they will not appear in the loop by default.
+    noCompanyId: added.filter(r => !r.companyId).length,
+  };
+}
+
+/** Remove a hand-typed address. Nothing else is touched. */
+export function removeManual(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return { error: 'no_email' };
+  const res = db.prepare('DELETE FROM keepwarm_manual WHERE email = ?').run(e);
+  return { ok: true, removed: res.changes };
+}
+
+/** Everyone added by hand, newest first, for the "By hand" list. */
+export function listManual() {
+  const rows = db.prepare(`
+    SELECT lower(m.email) AS email, m.company_name AS sent_company_name,
+           m.contact_name, m.added_at, m.external_company_id,
+           k.company_name AS live_company_name, k.primary_contact, k.stage,
+           NULL AS last_sent_at, NULL AS referrer_name
+      FROM keepwarm_manual m
+      LEFT JOIN keepwarm_stages k ON k.external_company_id = m.external_company_id
+     ORDER BY m.added_at DESC, m.email ASC
+  `).all();
+  return rows.map(project);
 }
 
 /**

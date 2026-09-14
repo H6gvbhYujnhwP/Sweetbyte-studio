@@ -209,6 +209,131 @@ function AudienceRow({ row, selectable = false, checked = true, onToggle }) {
   );
 }
 
+// One address on the "By hand" list. Mirrors DeadRow deliberately: same shape,
+// same Remove on the right, because the two lists do the same kind of job and a
+// second layout to learn is a cost with no benefit.
+function ManualRow({ row, onRemove, busy }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '9px 12px', borderBottom: `1px solid ${BORDER}`,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {row.contactName ? `${row.contactName} — ` : ''}{row.companyName || 'No company recorded'}
+        </div>
+        <div style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {row.email}
+        </div>
+      </div>
+      <GreetingPill greeting={row.greeting} />
+      <span style={{
+        fontSize: 12, color: row.stage ? SB.dark : AMBER,
+        background: row.stage ? SB.tint : AMBER_BG,
+        padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap',
+      }}>{row.stage ? row.stageLabel : 'No stage — not in the loop'}</span>
+      <button
+        onClick={() => onRemove(row.email)}
+        disabled={busy}
+        style={{
+          fontSize: 13, color: busy ? TERTIARY : DANGER, background: 'none', border: 'none',
+          cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+        }}
+      >
+        Remove
+      </button>
+    </div>
+  );
+}
+
+// The paste box. Kept as its own component so the Audience card does not grow a
+// third responsibility inline.
+function AddByHandCard({ text, onText, onAdd, busy, result }) {
+  return (
+    <Card>
+      <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
+        Add addresses by hand
+      </h2>
+      <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
+        For people whose address you have but who have never been sent an introduction email —
+        addresses that were only ever written into WorkTrackr notes, for instance. One per line.
+        Paste the WorkTrackr company id, company and contact name alongside if you have them, in any
+        order, separated by tabs or commas. <strong>The company id is what gives somebody a sales
+        stage</strong>, and without a stage they will not appear in the loop.
+      </p>
+      <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
+        Anything already in the loop, unsubscribed or bounced is skipped, and you will be told which.
+        Nothing is emailed by adding somebody here — they simply join the audience for the next
+        keep-warm send.
+      </p>
+
+      <textarea
+        value={text}
+        onChange={(e) => onText(e.target.value)}
+        placeholder={'dale.storrer@storrerandco.co.uk\n6c412c97-45c1-46a4-bfca-223e3b1f33eb\tStorrer & Co\tDale'}
+        rows={6}
+        style={{
+          width: '100%', boxSizing: 'border-box', padding: '10px 11px',
+          fontSize: 12, lineHeight: 1.5, fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+          border: `1px solid ${BORDER}`, borderRadius: 8, background: BG, color: TEXT, resize: 'vertical',
+        }}
+      />
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+        <Button tone="primary" disabled={busy || !text.trim()} onClick={onAdd}>
+          {busy ? 'Adding…' : 'Add to the loop'}
+        </Button>
+        {text.trim() && !busy && (
+          <span style={{ fontSize: 12, color: TERTIARY }}>
+            {text.trim().split(/\r?\n/).filter(l => l.trim()).length} lines pasted
+          </span>
+        )}
+      </div>
+
+      {result && <ManualResult result={result} />}
+    </Card>
+  );
+}
+
+// What happened, in full. A count on its own invites "which ones?", and the
+// answer changes what the operator does next.
+function ManualResult({ result }) {
+  const groups = {};
+  for (const s of result.skipped || []) {
+    (groups[s.reason] = groups[s.reason] || []).push(s.email);
+  }
+  return (
+    <div style={{ marginTop: 12 }}>
+      <Banner tone={result.added ? 'good' : 'warn'}>
+        {result.added
+          ? `${result.added} ${result.added === 1 ? 'address' : 'addresses'} added to the loop.`
+          : 'Nothing was added.'}
+        {result.noCompanyId > 0 && ` ${result.noCompanyId} of them had no company id, so they have no sales
+           stage — tick "No stage set" above to include them, or add the company id and they will pick
+           up their stage from WorkTrackr automatically.`}
+      </Banner>
+
+      {Object.keys(groups).map(reason => (
+        <div key={reason} style={{ fontSize: 13, color: MUTED, marginBottom: 6, lineHeight: 1.6 }}>
+          <strong style={{ color: TEXT }}>
+            {groups[reason].length} skipped — {reason}:
+          </strong>{' '}
+          {groups[reason].slice(0, 8).join(', ')}
+          {groups[reason].length > 8 && ` and ${groups[reason].length - 8} more`}
+        </div>
+      ))}
+
+      {(result.unreadable || []).length > 0 && (
+        <div style={{ fontSize: 13, color: DANGER, marginTop: 6, lineHeight: 1.6 }}>
+          <strong>{result.unreadable.length} lines had no email address in them</strong> and were
+          ignored: {result.unreadable.slice(0, 4).map(l => `"${l}"`).join(', ')}
+          {result.unreadable.length > 4 && ` and ${result.unreadable.length - 4} more`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // One address on the Dead list. The reason is the plain-English version; the
 // raw diagnostic from the mail server sits underneath in small type, because
 // the person deciding whether to delete a prospect should not have to read
@@ -1192,6 +1317,12 @@ export default function KeepWarm() {
     } catch { /* ignore */ }
   }, []);
 
+  // Adding addresses to the loop by hand.
+  const [manualText, setManualText] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualResult, setManualResult] = useState(null);
+  const [manualRows, setManualRows] = useState(null);
+
   // Reordering and removing on the Schedule tab. One busy flag for both,
   // because both change the running order and pressing a second while the
   // first is in flight would be acting on a list that is about to change.
@@ -1309,6 +1440,56 @@ export default function KeepWarm() {
     } finally {
       setSending(false);
     }
+  }
+
+  const loadManual = useCallback(async () => {
+    try {
+      const r = await fetch('/api/keepwarm/manual');
+      const d = await r.json();
+      if (r.ok) setManualRows(d.rows || []);
+    } catch { /* leave what is on screen */ }
+  }, []);
+
+  async function addByHand() {
+    setManualBusy(true);
+    setManualResult(null);
+    try {
+      const r = await fetch('/api/keepwarm/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: manualText }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error === 'nothing_pasted' ? 'Nothing to add.' : (d.error || 'Could not add'));
+      setManualResult(d);
+      // Clear the box only when something actually went in. Leaving a paste
+      // that was entirely skipped on screen means the addresses are still there
+      // to copy out and look at.
+      if (d.added > 0) setManualText('');
+      await loadOverview();
+      await loadAudience(listMode, search);
+      await loadManual();
+    } catch (err) {
+      setManualResult({ added: 0, skipped: [], unreadable: [], error: err.message });
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
+  async function removeByHand(email) {
+    setManualBusy(true);
+    try {
+      const r = await fetch('/api/keepwarm/manual/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!r.ok) throw new Error('Could not remove');
+      await loadOverview();
+      await loadAudience(listMode, search);
+      await loadManual();
+    } catch { /* the reload below shows the truth either way */ }
+    finally { setManualBusy(false); }
   }
 
   async function moveSlot(draftId, direction) {
@@ -1453,6 +1634,7 @@ export default function KeepWarm() {
       const t = setTimeout(() => loadDead(search), 250);
       return () => clearTimeout(t);
     }
+    if (listMode === 'manual') { loadManual(); return; }
     const t = setTimeout(() => loadAudience(listMode, search), 250);
     return () => clearTimeout(t);
   }, [showList, listMode, search, loadAudience, loadDead]);
@@ -1836,6 +2018,9 @@ export default function KeepWarm() {
                     <Button tone={listMode === 'dead' ? 'primary' : 'plain'} onClick={() => setListMode('dead')}>
                       Dead{overview.deadCount ? ` (${overview.deadCount})` : ''}
                     </Button>
+                    <Button tone={listMode === 'manual' ? 'primary' : 'plain'} onClick={() => setListMode('manual')}>
+                      By hand{manualRows && manualRows.length ? ` (${manualRows.length})` : ''}
+                    </Button>
                     {listMode === 'included' && (
                       <>
                         <Button onClick={selectAll}>Select all</Button>
@@ -1875,7 +2060,26 @@ export default function KeepWarm() {
                       border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', marginBottom: 10,
                     }}
                   />
-                  {listMode === 'dead' ? (<>
+                  {listMode === 'manual' ? (<>
+                    <div style={{ fontSize: 12, color: MUTED, background: BG, border: `1px solid ${BORDER}`,
+                                  borderRadius: 7, padding: '8px 11px', marginBottom: 10, lineHeight: 1.5 }}>
+                      Addresses you typed in rather than ones Studio has emailed. They sit in the loop
+                      on the same terms as everybody else. Removing one takes them out of the loop and
+                      nothing more — it does not unsubscribe them, and you can add them again.
+                      Anyone here who is later sent a real introduction email drops off this list,
+                      because from then on the send record is what keeps them in.
+                    </div>
+                    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
+                      {(manualRows || []).map(r => (
+                        <ManualRow key={r.email} row={r} onRemove={removeByHand} busy={manualBusy} />
+                      ))}
+                      {manualRows && manualRows.length === 0 && (
+                        <div style={{ padding: '16px 12px', fontSize: 13, color: MUTED }}>
+                          Nobody has been added by hand.
+                        </div>
+                      )}
+                    </div>
+                  </>) : listMode === 'dead' ? (<>
                     <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
                       {(dead?.rows || []).map(r => (
                         <DeadRow key={r.email} row={r} onRemove={removeDead} busy={deadBusy} />
@@ -1924,6 +2128,16 @@ export default function KeepWarm() {
             </Card>
 
             </>)}
+
+            {tab === 'audience' && (
+              <AddByHandCard
+                text={manualText}
+                onText={setManualText}
+                onAdd={addByHand}
+                busy={manualBusy}
+                result={manualResult}
+              />
+            )}
 
             {tab === 'drafts' && (<>
             {/* ── Generate ─────────────────────────────────────────────── */}
