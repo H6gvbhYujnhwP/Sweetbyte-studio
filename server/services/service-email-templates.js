@@ -11,7 +11,14 @@
  * combining logic from git history (commit prior to the single-service change).
  *
  * Everything a prospect reads is in this file. No copy lives in the sender.
+ *
+ * One exception, added deliberately: the signature is in
+ * services/email-signature.js, because it is the one block of copy that also
+ * has to appear, identical, on the keep-warm emails. It is still not in the
+ * sender — it is in a file of its own that both template files read.
  */
+
+import { signatureHtml } from './email-signature.js';
 
 // The one service. `key` is written into service_email_sends rows and is the
 // dedup key, so it is permanent once the first email has gone out.
@@ -178,21 +185,9 @@ const CLOSING_REFERRAL = `
 `;
 
 
-// Signature block. Hardcoded rather than driven by SERVICE_EMAIL_SENDER_NAME:
-// a job title, phone number and company name can't be derived from a first
-// name, so if someone other than Billy ever sends these, this block needs
-// editing rather than an env var flipping.
-//
-// Inline styles only — Gmail and Outlook both strip <style> blocks from the
-// head, so anything relying on a class silently loses its formatting.
-const SIGNATURE = `
-  <p style="margin:16px 0 0;${FONT}">
-    <strong>Billy Crockett</strong>&nbsp; |&nbsp; Business Development Consultant<br>
-    Sweetbyte Ltd<br>
-    01702 540776<br>
-    <a href="https://www.sweetbyte.co.uk" style="color:#0b6bcb;">www.sweetbyte.co.uk</a>
-  </p>
-`;
+// The signature used to be a const here, as a second copy of the one in
+// keepwarm-generator.js. Both are gone: there is one in
+// services/email-signature.js and every send path reads it.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lookup / catalogue
@@ -385,9 +380,11 @@ export function renderServiceEmail({
     </p>
   `;
 
+  // The signature carries no {{tokens}}, so it does not go through
+  // applyTokens the way the old copy did — there is nothing in it to fill in.
   return [
     body,
-    applyTokens(SIGNATURE, vars),
+    signatureHtml(),
     footer,
   ].join('\n');
 }

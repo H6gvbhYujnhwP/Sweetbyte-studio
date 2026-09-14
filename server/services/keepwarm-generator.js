@@ -28,10 +28,12 @@
  * question and is not decided here.
  *
  * HTML SHAPE
- * Plain, inline-styled, single column, no tables and no media queries. The font
- * stack matches service-email-templates.js so the introduction email and the
- * keep-warm emails that follow it look like they came from the same person —
- * because they did.
+ * Plain, inline-styled, single column, no media queries. The body has no tables
+ * in it; the signature does, because a two-column block with a vertical rule is
+ * a table in Outlook or it is nothing. The font stack matches
+ * service-email-templates.js, and the signature itself is shared with it, so the
+ * introduction email and the keep-warm emails that follow it look like they came
+ * from the same person — because they did.
  *
  * Env: ANTHROPIC_API_KEY (required).
  */
@@ -40,6 +42,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+import { signatureHtml } from './email-signature.js';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -80,27 +84,9 @@ export const ALLOWED_COUNTS = [3, 6, 9];
 const FONT = "font-family:Aptos,'Aptos Display',Calibri,'Segoe UI',Arial,sans-serif;font-size:11pt;";
 const P_STYLE = `margin:0 0 1em;${FONT}`;
 
-/**
- * The signature block. Hardcoded to Billy rather than driven by an env var,
- * for the same reason the introduction email's is: a job title and a phone
- * number cannot be derived from a first name. These emails come from Billy's
- * address, so they carry Billy's name. If Joe or Lewis ever send them, this
- * block needs editing.
- *
- * No brochure attachment — the website, the address and the number are the
- * whole footer, as agreed.
- */
-export function signatureHtml() {
-  return `
-  <p style="${P_STYLE}">Thanks,<br>
-  <strong>Billy Crockett</strong><br>
-  Sweetbyte Ltd</p>
-  <p style="margin:0 0 1em;${FONT}color:#444;">
-    <a href="https://sweetbyte.co.uk" style="color:#1EA4C9;text-decoration:none;">sweetbyte.co.uk</a><br>
-    <a href="mailto:billy@sweetbyte.co.uk" style="color:#1EA4C9;text-decoration:none;">billy@sweetbyte.co.uk</a><br>
-    01702 540776
-  </p>`;
-}
+// The signature used to live here, as a second copy of the one in
+// service-email-templates.js. Both are gone: there is one in
+// services/email-signature.js and every send path reads it.
 
 /**
  * Assemble a finished email: the generated body, then the signature, then the
@@ -160,6 +146,12 @@ ${optOut}
 export function htmlToText(html) {
   return String(html || '')
     .replace(/<\s*br\s*\/?>/gi, '\n')
+    // The signature is a table, so a row end has to become a line end or the
+    // whole thing arrives as one run-on sentence in the plain-text half of the
+    // email. Generated bodies contain only <p>, so this does nothing to the
+    // editor's round trip — it only matters once a signature is attached.
+    .replace(/<\s*\/\s*(tr|table|div)\s*>/gi, '</p>')
+    .replace(/<\s*\/\s*td\s*>/gi, ' ')
     .split(/<\s*\/\s*p\s*>/i)
     .map(chunk => chunk.replace(/<[^>]*>/g, ''))
     .map(chunk => chunk
