@@ -2,7 +2,7 @@
  * server/services/keepwarm-reminders.js — send-day calendar and reminders.
  *
  * WHAT THIS DOES
- * Keep-warm goes out on the 2nd and 4th Tuesday of the month. Nothing here
+ * Keep-warm goes out on the 1st and 3rd Tuesday of the month. Nothing here
  * sends a keep-warm email to anybody — that stays a button a person presses.
  * This works out which days those are, emails the operator the day before so
  * there is time to write and approve something, emails again on the morning
@@ -12,8 +12,9 @@
  * Counting fortnights from the last send drifts: a send that slips to Thursday
  * moves every send after it to a Thursday. A named day does not drift, and a
  * rhythm people half-recognise is worth more than an exact interval. The cost
- * is that it is not quite fortnightly — a month with five Tuesdays puts three
- * weeks between the 4th and the next 2nd. That is inherent to the rule, not a
+ * is that it is not quite fortnightly — the 1st to the 3rd Tuesday is always
+ * fourteen days, but the 3rd to the next month's 1st is fourteen or twenty-one
+ * depending on where the month starts. That is inherent to the rule, not a
  * fault, and the operator chose it knowing.
  *
  * TIME ZONES — THE BIT THAT WOULD OTHERWISE BE WRONG HALF THE YEAR
@@ -102,16 +103,28 @@ function addDays(ymd, n) {
 }
 
 /**
- * The 2nd and 4th Tuesday of a given month, as YYYY-MM-DD.
+ * Which Tuesdays of the month are send days, as YYYY-MM-DD.
+ *
+ * Currently the 1st and the 3rd. Changing the rhythm is a change to these two
+ * numbers and nothing else — the reminders, the banner and the Schedule tab all
+ * read the same calendar, so they cannot end up disagreeing.
+ *
+ *   WEEKDAY   0 Sunday … 2 Tuesday … 6 Saturday
+ *   ORDINALS  which ones to take, counting from 1
  */
+const WEEKDAY  = 2;
+const ORDINALS = [1, 3];
+
 export function sendDaysIn(year, month) {
-  const out = [];
+  const all = [];
   const d = new Date(Date.UTC(year, month - 1, 1, 12));
   while (d.getUTCMonth() === month - 1) {
-    if (d.getUTCDay() === 2) out.push(toYmd(d));
+    if (d.getUTCDay() === WEEKDAY) all.push(toYmd(d));
     d.setUTCDate(d.getUTCDate() + 1);
   }
-  return [out[1], out[3]].filter(Boolean);
+  // filter() drops a missing one rather than leaving a hole — a 5th Tuesday
+  // does not exist every month, so an ordinal can legitimately come back empty.
+  return ORDINALS.map(n => all[n - 1]).filter(Boolean);
 }
 
 export function isSendDay(ymd) {
