@@ -79,6 +79,36 @@ function detailRow(base, file, alt, html) {
 }
 
 /**
+ * The legal disclaimer, for the footer — below the unsubscribe line on
+ * keep-warm, below the "why you're getting this" line on the introduction and
+ * follow-up emails.
+ *
+ * Shared for the same reason the signature is: two copies of a legal notice
+ * that are meant to be identical are one edit away from disagreeing, and a
+ * disagreement between two versions of a disclaimer is worse than not having
+ * one.
+ *
+ * Set smaller and greyer than the unsubscribe line above it, deliberately. It
+ * has to be present and readable; it does not have to compete with the email.
+ * The bank-details line is the one that earns its place — invoice-redirection
+ * fraud starts with an email from a supplier's real address, and a standing
+ * statement that Sweetbyte never changes details without a phone call is the
+ * cheapest defence there is.
+ */
+export function disclaimerHtml() {
+  // Each line is one unbroken line of source on purpose. A source newline
+  // inside the paragraph is invisible in HTML but survives into the plain-text
+  // half of the email, where it breaks a sentence in the middle.
+  const lines = [
+    "This email may contain privileged information. If you're not the intended recipient, please call 01702 540776 and delete it.",
+    'We accept no responsibility for content sent via the internet. Nothing here is legally binding unless confirmed in writing.',
+    'We will never change bank details without verbal confirmation.',
+    'Please consider the environment before printing.',
+  ];
+  return `<p style="margin:10px 0 0;${FONT}font-size:8pt;color:#9aa1aa;line-height:1.55;">${lines.join('<br>')}</p>`;
+}
+
+/**
  * The signature.
  *
  * @param {object}  [opts]

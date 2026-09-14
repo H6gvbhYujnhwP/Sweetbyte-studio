@@ -43,7 +43,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { signatureHtml } from './email-signature.js';
+import { signatureHtml, disclaimerHtml } from './email-signature.js';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -119,6 +119,7 @@ ${greeting}
 ${bodyHtml}
 ${signatureHtml()}
 ${optOut}
+${disclaimerHtml()}
 </div>`;
 }
 

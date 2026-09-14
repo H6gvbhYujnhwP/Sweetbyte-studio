@@ -18,7 +18,7 @@
  * sender — it is in a file of its own that both template files read.
  */
 
-import { signatureHtml } from './email-signature.js';
+import { signatureHtml, disclaimerHtml } from './email-signature.js';
 
 // The one service. `key` is written into service_email_sends rows and is the
 // dedup key, so it is permanent once the first email has gone out.
@@ -378,6 +378,7 @@ export function renderServiceEmail({
       <a href="${escapeHtml(unsubUrl)}" style="color:#6b7280;">unsubscribe here</a>
       and we'll stop contacting you.
     </p>
+    ${disclaimerHtml()}
   `;
 
   // The signature carries no {{tokens}}, so it does not go through
