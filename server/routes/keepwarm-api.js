@@ -43,6 +43,7 @@ import {
   moveDraftInSchedule,
   addManualToLoop,
   removeManual,
+  removeAllManual,
   listManual,
   emptyBin,
   previousSubjects,
@@ -586,6 +587,21 @@ router.post('/manual/remove', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[keepwarm] manual remove failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /manual/remove-all
+ *
+ * Clears the whole hand-typed list. Separate route rather than a flag on
+ * /manual/remove, so a bug in the single-row path can never wipe the lot.
+ */
+router.post('/manual/remove-all', (req, res) => {
+  try {
+    res.json(removeAllManual());
+  } catch (err) {
+    console.error('[keepwarm] manual remove-all failed:', err);
     res.status(500).json({ error: err.message });
   }
 });

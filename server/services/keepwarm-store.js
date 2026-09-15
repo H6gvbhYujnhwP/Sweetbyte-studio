@@ -449,7 +449,25 @@ function rawAudience() {
       m.contact_name           AS contact_name,
       NULL                     AS referrer_name,
       k.company_name           AS live_company_name,
-      k.primary_contact        AS primary_contact,
+      -- Deliberately NOT k.primary_contact.
+      --
+      -- For somebody Studio has emailed, falling back to WorkTrackr's live
+      -- contact name is reasonable: there was a conversation, and the name on
+      -- the record is probably the person who had it.
+      --
+      -- For a hand-typed address it is actively dangerous, and it went wrong
+      -- immediately. Eltham Welding has three addresses in the notes —
+      -- debbie@, sales@ and timo@ — and WorkTrackr's primary contact for the
+      -- company is Timo Simpson. So all three greeted as "Hi Timo,", including
+      -- Debbie's own address and a shared sales mailbox. Across the 192
+      -- addresses added from the notes, 142 would have greeted the wrong
+      -- person.
+      --
+      -- An address written in a note belongs to whoever it belongs to, and the
+      -- company's main contact is not evidence about that. So a hand-typed row
+      -- greets using the name typed in beside it and nothing else. No name
+      -- means "Hi there," — which is the correct thing to say to sales@ anyway.
+      NULL                     AS primary_contact,
       k.stage                  AS stage
     FROM keepwarm_manual m
     LEFT JOIN keepwarm_stages k
@@ -790,12 +808,27 @@ export function removeManual(email) {
   return { ok: true, removed: res.changes };
 }
 
+/**
+ * Remove every hand-typed address at once.
+ *
+ * Exists because the first paste put 192 of them in and the greeting on 142 was
+ * wrong. Taking those out one row at a time is not a realistic thing to ask.
+ */
+export function removeAllManual() {
+  const res = db.prepare('DELETE FROM keepwarm_manual').run();
+  return { ok: true, removed: res.changes };
+}
+
 /** Everyone added by hand, newest first, for the "By hand" list. */
 export function listManual() {
   const rows = db.prepare(`
     SELECT lower(m.email) AS email, m.company_name AS sent_company_name,
            m.contact_name, m.added_at, m.external_company_id,
-           k.company_name AS live_company_name, k.primary_contact, k.stage,
+           k.company_name AS live_company_name,
+           -- Same reason as in rawAudience: never the company's primary
+           -- contact. The list on screen has to show the greeting the email
+           -- will actually use, or checking it is pointless.
+           NULL AS primary_contact, k.stage,
            NULL AS last_sent_at, NULL AS referrer_name
       FROM keepwarm_manual m
       LEFT JOIN keepwarm_stages k ON k.external_company_id = m.external_company_id
