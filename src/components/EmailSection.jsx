@@ -992,6 +992,10 @@ function CampaignModal({emailClient,lists,initial,onClose,onSaved}){
     track_opens:  !!initial?.track_opens,
     track_clicks: !!initial?.track_clicks,
     track_unsub:  !!initial?.track_unsub,
+    // Billy's signature on the bottom. Off for new campaigns on purpose — this
+    // screen sends for other customers too, and his name and direct line have
+    // no business on an email going out under another company's name.
+    include_signature: !!initial?.include_signature,
     // Drip schedule. Default off for new campaigns. Existing campaigns preserve
     // their saved values. daily_limit > 0 means dripping is enabled.
     daily_limit:        initial?.daily_limit        ?? 0,
@@ -1341,6 +1345,28 @@ function CampaignModal({emailClient,lists,initial,onClose,onSaved}){
         />
       </div>
     </div>
+    {/* The signature. A tick box rather than a setting, because the same screen
+        sends campaigns for itcloudpros.uk, idoyourquotes and wedoyourquotes. */}
+    <div style={{borderTop:`0.5px solid ${BORDER}`,paddingTop:14,marginTop:14}}>
+      <label style={{display:'flex',gap:9,alignItems:'flex-start',cursor:'pointer'}}>
+        <input
+          type="checkbox"
+          checked={!!form.include_signature}
+          onChange={e=>set('include_signature',e.target.checked)}
+          style={{marginTop:2,cursor:'pointer'}}
+        />
+        <span>
+          <span style={{fontSize:14,fontWeight:500,color:TEXT}}>Add Billy's Sweetbyte signature</span>
+          <span style={{display:'block',fontSize:11,color:MUTED,marginTop:2,lineHeight:1.5}}>
+            The full signature — logo, name, job title, phone, address, company registration — on the
+            bottom of every email in this campaign, the same one the keep-warm and introduction
+            emails use. The pictures travel inside the message so Outlook cannot block them.
+            Leave this off for campaigns going out under another company's name.
+          </span>
+        </span>
+      </label>
+    </div>
+
     <ScheduleControls form={form} set={set} totalSubs={lists.find(l=>l.id===form.list_id)?.subscriber_count||0}/>
     <TrackingControls form={form} set={set}/>
     {err&&<div style={{color:DANGER,fontSize:13,marginTop:14,marginBottom:10}}>{err}</div>}

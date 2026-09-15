@@ -976,6 +976,9 @@ router.post('/campaigns', (req, res) => {
     // is a 'draft' and behaves like a normal one-shot send.
     daily_limit, drip_start_at, send_order,
     drip_send_days, drip_window_start, drip_window_end, drip_timezone,
+    // Sweetbyte's signature on the bottom. Off unless asked for — see the
+    // include_signature migration in db.js for why it is not a global setting.
+    include_signature,
   } = req.body;
   if (!email_client_id || !list_id || !title || !subject || !from_name || !from_email || !html_body) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -995,8 +998,9 @@ router.post('/campaigns', (req, res) => {
      tracking_mode, tracking_threshold, tracking_window,
      track_opens, track_clicks, track_unsub,
      daily_limit, drip_start_at, send_order,
-     drip_send_days, drip_window_start, drip_window_end, drip_timezone)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     drip_send_days, drip_window_start, drip_window_end, drip_timezone,
+     include_signature)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, email_client_id, list_id, title, subject, from_name, from_email, reply_to || from_email,
       html_body, plain_body || null, startStatus, scheduled_at || null,
       tracking_mode || 'off',
@@ -1010,6 +1014,7 @@ router.post('/campaigns', (req, res) => {
       drip_window_start  || '09:00',
       drip_window_end    || '11:00',
       drip_timezone      || 'Europe/London',
+      include_signature ? 1 : 0,
     );
   res.json(db.prepare('SELECT * FROM email_campaigns WHERE id=?').get(id));
 });
@@ -1022,6 +1027,7 @@ router.put('/campaigns/:id', (req, res) => {
     // Drip schedule fields. All optional — only the ones given are updated.
     daily_limit, drip_start_at, send_order,
     drip_send_days, drip_window_start, drip_window_end, drip_timezone,
+    include_signature,
   } = req.body;
   const current = db.prepare('SELECT * FROM email_campaigns WHERE id=?').get(req.params.id);
   if (!current) return res.status(404).json({ error: 'Not found' });
@@ -1053,7 +1059,8 @@ router.put('/campaigns/:id', (req, res) => {
     drip_send_days=COALESCE(?, drip_send_days),
     drip_window_start=COALESCE(?, drip_window_start),
     drip_window_end=COALESCE(?, drip_window_end),
-    drip_timezone=COALESCE(?, drip_timezone)
+    drip_timezone=COALESCE(?, drip_timezone),
+    include_signature=COALESCE(?, include_signature)
     WHERE id=?`).run(
       title ?? current.title, subject ?? current.subject,
       from_name ?? current.from_name, from_email ?? current.from_email,
@@ -1073,6 +1080,9 @@ router.put('/campaigns/:id', (req, res) => {
       drip_window_start ?? null,
       drip_window_end ?? null,
       drip_timezone ?? null,
+      // COALESCE, like the tracking flags above: an edit that does not mention
+      // the signature leaves it as it was rather than silently turning it off.
+      include_signature === undefined ? null : (include_signature ? 1 : 0),
       req.params.id,
     );
   res.json(db.prepare('SELECT * FROM email_campaigns WHERE id=?').get(req.params.id));
@@ -1535,7 +1545,16 @@ router.post('/campaigns/:id/test', async (req, res) => {
     const subject = (campaign.subject || '')
       .replace(/\{\{\s*first_name\s*\}\}/gi, 'there')
       .replace(/\[Name\]/gi, 'there');
-    const html = rawHtml.includes('</body>') ? rawHtml.replace('</body>', `${testFooter}</body>`) : rawHtml + testFooter;
+    // The signature goes on before the test footer, so a test shows the email
+    // as it will actually arrive. A test send that omits it would be the one
+    // thing you cannot check by testing.
+    const { signatureHtml, signatureImages } = await import('../services/email-signature.js');
+    const withSig = campaign.include_signature
+      ? `${rawHtml}\n${signatureHtml({ inline: true })}`
+      : rawHtml;
+    const html = withSig.includes('</body>')
+      ? withSig.replace('</body>', `${testFooter}</body>`)
+      : withSig + testFooter;
 
     const { sendEmail } = await import('../services/ses.js');
     // NOTE: no campaignId/subscriberId/baseUrl — test sends skip tracking
@@ -1549,6 +1568,7 @@ router.post('/campaigns/:id/test', async (req, res) => {
       subject:   `[TEST] ${subject}`,
       htmlBody:  html,
       plainBody: `TEST SEND\n\n${campaign.plain_body || campaign.html_body.replace(/<[^>]+>/g,'')}`,
+      inlineImages: campaign.include_signature ? signatureImages() : [],
     });
     res.json({ ok: true });
   } catch (err) {

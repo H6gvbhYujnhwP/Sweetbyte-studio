@@ -511,6 +511,21 @@ db.exec(`
   }
 }
 
+// ── 11b. SWEETBYTE SIGNATURE ON A CAMPAIGN ───────────────────────────────────
+// Off by default, and that default matters. The campaign system sends for
+// several customers — itcloudpros.uk, idoyourquotes, wedoyourquotes — and a
+// signature carrying Billy's name, job title and direct line has no business on
+// an email going out under somebody else's company name. So it is a per-campaign
+// tick box rather than a setting that applies everywhere, and a campaign that
+// says nothing about it gets no signature.
+{
+  const cols = db.prepare('PRAGMA table_info(email_campaigns)').all().map(r => r.name);
+  if (!cols.includes('include_signature')) {
+    db.exec(`ALTER TABLE email_campaigns ADD COLUMN include_signature INTEGER DEFAULT 0`);
+    console.log('[db] migration: added include_signature to email_campaigns');
+  }
+}
+
 // ── 12. PER-LIST "ALWAYS WARM" OVERRIDE ──────────────────────────────────────
 // When set on a list, every subscriber on that list is treated as warm regardless
 // of their actual touch count. Used for e.g. "existing customers" or "newsletter

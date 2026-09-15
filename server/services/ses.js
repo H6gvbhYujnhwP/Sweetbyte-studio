@@ -12,6 +12,7 @@
 import https from 'https';
 import crypto from 'crypto';
 import db from '../db.js';
+import { signatureHtml, signatureImages } from './email-signature.js';
 import { v4 as uuid } from 'uuid';
 import { applyTracking } from './tracking.js';
 import { getTouchCountsBulk, shouldTrackRecipient } from './touch-count.js';
@@ -435,7 +436,24 @@ export async function sendCampaign({ campaign, subscribers, baseUrl, alwaysWarm 
 
   // Body for THIS send call. For step 1 (or any non-step-aware send) it's the
   // campaign's html_body. For follow-up steps the ticker passes the step body in.
-  const effectiveHtmlBody = bodyOverride !== null ? bodyOverride : campaign.html_body;
+  const rawHtmlBody = bodyOverride !== null ? bodyOverride : campaign.html_body;
+
+  // The Sweetbyte signature, only when the campaign asked for it. Off by
+  // default because this sender also sends for other customers, and Billy's
+  // name and direct line on an email going out under another company's name
+  // would be worse than having no signature at all.
+  //
+  // Appended once here rather than per recipient: it contains no personal
+  // fields, so building it 99 times would be 99 identical strings.
+  const wantsSignature = !!campaign.include_signature;
+  const effectiveHtmlBody = wantsSignature
+    ? `${rawHtmlBody || ''}\n${signatureHtml({ inline: true })}`
+    : rawHtmlBody;
+
+  // The pictures that go with it. Same mechanism as the keep-warm and
+  // introduction emails: they travel inside the message, because Outlook blocks
+  // remote images by default on mail from outside the recipient's organisation.
+  const signaturePictures = wantsSignature ? signatureImages() : [];
   // Subject for THIS send call. Follow-ups can override per-step.
   const effectiveSubject  = subjectOverride !== null ? subjectOverride : campaign.subject;
   // Detect whether this body uses {{first_name}} anywhere — if it doesn't,
@@ -472,6 +490,7 @@ export async function sendCampaign({ campaign, subscribers, baseUrl, alwaysWarm 
         const { messageId } = await sendEmail({
           to:          sub.email,
           toName:      sub.name,
+          inlineImages: signaturePictures,
           fromName:    campaign.from_name,
           fromEmail:   campaign.from_email,
           replyTo:     campaign.reply_to,
