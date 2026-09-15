@@ -1476,23 +1476,6 @@ export default function KeepWarm() {
     }
   }
 
-  async function removeAllByHand() {
-    if (!window.confirm(
-      `Remove all ${(manualRows || []).length} addresses added by hand?\n\n`
-      + 'They come out of the keep-warm loop. Nobody is unsubscribed and nothing '
-      + 'is emailed — you can paste a corrected list straight back in.',
-    )) return;
-    setManualBusy(true);
-    try {
-      const r = await fetch('/api/keepwarm/manual/remove-all', { method: 'POST' });
-      if (!r.ok) throw new Error('Could not clear the list');
-      await loadOverview();
-      await loadAudience(listMode, search);
-      await loadManual();
-    } catch { /* the reload shows the truth either way */ }
-    finally { setManualBusy(false); }
-  }
-
   async function removeByHand(email) {
     setManualBusy(true);
     try {
@@ -1792,7 +1775,9 @@ export default function KeepWarm() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Generation failed');
-      if (d.short) setGenNote(`Asked for ${d.requested}, got ${d.generated} back.`);
+      // The server says why, in plain English, when it can. The bare count is
+      // the fallback for an older reply that has no note on it.
+      if (d.short) setGenNote(d.note || `Asked for ${d.requested}, got ${d.generated} back.`);
       // The ticks clear because those lines are now spoken for by a draft. They
       // are not used up yet — bin the draft and the line comes back.
       setPicked([]);
@@ -2086,13 +2071,6 @@ export default function KeepWarm() {
                       Anyone here who is later sent a real introduction email drops off this list,
                       because from then on the send record is what keeps them in.
                     </div>
-                    {manualRows && manualRows.length > 0 && (
-                      <div style={{ marginBottom: 10 }}>
-                        <Button tone="danger" disabled={manualBusy} onClick={removeAllByHand}>
-                          Remove all {manualRows.length}
-                        </Button>
-                      </div>
-                    )}
                     <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', maxHeight: 380, overflowY: 'auto' }}>
                       {(manualRows || []).map(r => (
                         <ManualRow key={r.email} row={r} onRemove={removeByHand} busy={manualBusy} />

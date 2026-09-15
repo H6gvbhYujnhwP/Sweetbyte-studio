@@ -43,7 +43,6 @@ import {
   moveDraftInSchedule,
   addManualToLoop,
   removeManual,
-  removeAllManual,
   listManual,
   emptyBin,
   previousSubjects,
@@ -351,28 +350,62 @@ router.post('/generate', async (req, res) => {
     // Written one at a time because each has its own fixed subject, and in
     // sequence rather than all at once so a rate limit surfaces as one clear
     // failure rather than a partial batch with a gap in the middle.
+    // Notes are collected rather than thrown. One email that cannot be written
+    // is not a reason to lose the rest of the batch — the operator keeps what is
+    // good and bins the rest, which is what the Drafts screen is for. Nothing
+    // that failed its checks is ever saved; it is just reported instead.
+    const notes = [];
+
+    // Written one at a time because each has its own fixed subject, and in
+    // sequence rather than all at once so a rate limit surfaces as one clear
+    // failure rather than a partial batch with a gap in the middle.
     const fromLines = [];
     for (const subject of picked) {
-      fromLines.push(await generateFromSubject({ subject, avoid: previous }));
+      try {
+        fromLines.push(await generateFromSubject({ subject, avoid: previous }));
+      } catch (err) {
+        notes.push(`Your own line "${subject}" could not be used: ${err.message}`);
+      }
     }
 
     // The free ones are told about the picked lines as well, so Studio does not
     // invent a fourth email on the same joke the operator just chose.
     const remaining = count - picked.length;
-    const invented = remaining > 0
-      ? await generateEmails(remaining, [...previous, ...picked.map(subject => ({ subject, angle: null }))])
-      : [];
+    let invented = [];
+    if (remaining > 0) {
+      const batch = await generateEmails(
+        remaining,
+        [...previous, ...picked.map(subject => ({ subject, angle: null }))],
+      );
+      invented = batch.drafts;
+      for (const item of batch.rejected) {
+        notes.push(`One email about ${item.area || 'an unnamed area'} was dropped: ${item.errors[0]}`);
+      }
+      if (batch.extras > 0) {
+        notes.push(`The model sent ${batch.extras} more than asked for; the extras were dropped.`);
+      }
+    }
 
     const drafts = [...fromLines, ...invented];
+    if (drafts.length === 0) {
+      throw new Error(`Nothing usable came back. ${notes.join(' ')}`.trim());
+    }
+
     insertDrafts(batchId, drafts);
     finishBatch(batchId);
 
-    console.log(`[keepwarm] generated ${drafts.length} draft(s) (asked for ${count}, ${picked.length} from the operator's own lines)`);
+    const short = drafts.length < count;
+    const note = short
+      ? [`Asked for ${count}, kept ${drafts.length}.`, ...notes].join(' ')
+      : (notes.length ? notes.join(' ') : null);
+
+    console.log(`[keepwarm] generated ${drafts.length} draft(s) (asked for ${count}, ${picked.length} from the operator's own lines, ${notes.length} note(s))`);
     res.json({
       batchId,
       generated: drafts.length,
       requested: count,
-      short: drafts.length < count,
+      short: short || notes.length > 0,
+      note,
       drafts: listDrafts({ status: 'draft', limit: 200 }).filter(d => d.batch_id === batchId),
     });
   } catch (err) {
@@ -587,21 +620,6 @@ router.post('/manual/remove', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[keepwarm] manual remove failed:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /manual/remove-all
- *
- * Clears the whole hand-typed list. Separate route rather than a flag on
- * /manual/remove, so a bug in the single-row path can never wipe the lot.
- */
-router.post('/manual/remove-all', (req, res) => {
-  try {
-    res.json(removeAllManual());
-  } catch (err) {
-    console.error('[keepwarm] manual remove-all failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
