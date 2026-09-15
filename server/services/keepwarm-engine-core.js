@@ -22,7 +22,7 @@
  *    line for having an exclamation mark in it.
  */
 
-import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES } from './content-patterns.js';
+import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES } from './keepwarm-engine-patterns.js';
 import {
   buildSystemPrompt,
   buildBatchPrompt,
@@ -30,8 +30,8 @@ import {
   buildSubjectRewritePrompt,
   buildBodyRewritePrompt,
   buildFromSubjectPrompt,
-} from './prompts.js';
-import { parseJsonOnly, validateBatch, validateEmail, validateSubject } from './validator.js';
+} from './keepwarm-engine-prompts.js';
+import { parseJsonOnly, validateBatch, validateEmail, validateSubject } from './keepwarm-engine-validator.js';
 
 function hashString(value) {
   let hash = 2166136261;

@@ -27,7 +27,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { unwrapJsonText } from './keepwarm-engine/validator.js';
+import { unwrapJsonText } from './keepwarm-engine-validator.js';
 
 const MODEL = 'claude-sonnet-4-5';
 const MAX_TOKENS = 8000;

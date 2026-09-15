@@ -6,7 +6,7 @@
  * from. Emails rather than posts, and no images.
  *
  * HOW THE WRITING HAPPENS
- * The prompt used to be in this file. It now lives in keepwarm-engine/, which
+ * The prompt used to be in this file. It now lives in the keepwarm-engine-* files, which
  * assigns each email in a batch its own subject area before asking for
  * anything, and checks every email that comes back before it is allowed to
  * become a draft. This file still owns the knowledge base, the renderer and the
@@ -51,7 +51,7 @@ import { fileURLToPath } from 'url';
 
 import { signatureHtml, disclaimerHtml } from './email-signature.js';
 import { FONT, P_STYLE } from './email-body-style.js';
-import { KeepWarmEngine } from './keepwarm-engine/index.js';
+import { KeepWarmEngine } from './keepwarm-engine-core.js';
 import { createKeepWarmModel } from './keepwarm-model.js';
 
 // ── The RAG ──────────────────────────────────────────────────────────────────
@@ -207,7 +207,7 @@ export function textToHtml(text) {
 // ── The engine ───────────────────────────────────────────────────────────────
 //
 // The prompt that used to live in this file has gone. Writing the emails is now
-// done by keepwarm-engine/, which plans a distinct subject area for every email
+// done by the keepwarm-engine-* files, which plan a distinct subject area for every email
 // in a batch before asking for anything, and checks each one that comes back
 // against the rules rather than hoping the model followed them.
 //

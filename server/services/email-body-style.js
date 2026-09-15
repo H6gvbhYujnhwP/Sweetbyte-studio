@@ -3,7 +3,7 @@
  *
  * WHY THIS IS ITS OWN FILE
  * These two strings used to live at the top of keepwarm-generator.js. The
- * generation engine in keepwarm-engine/ needs the same paragraph style, for
+ * generation engine in the keepwarm-engine-* files needs the same paragraph style, for
  * three separate reasons, and a second copy would break all three the first
  * time one of them was edited:
  *

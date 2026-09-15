@@ -9,8 +9,8 @@
  * paragraphs in Studio's style. See email-body-style.js.
  */
 
-import { CONTENT_PATTERNS } from './content-patterns.js';
-import { P_STYLE } from '../email-body-style.js';
+import { CONTENT_PATTERNS } from './keepwarm-engine-patterns.js';
+import { P_STYLE } from './email-body-style.js';
 
 export const PARAGRAPH_STYLE = P_STYLE;
 

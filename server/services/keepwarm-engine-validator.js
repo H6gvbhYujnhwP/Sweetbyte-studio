@@ -20,7 +20,7 @@
  *    unaltered. That is a settled Studio decision, not an oversight here.
  */
 
-import { PARAGRAPH_STYLE } from './prompts.js';
+import { PARAGRAPH_STYLE } from './keepwarm-engine-prompts.js';
 
 const FORBIDDEN_BODY_PATTERNS = [
   [/\bhi\s+(?:there|\{\{|[A-Z])/i, 'Do not include a greeting'],
