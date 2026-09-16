@@ -50,6 +50,7 @@ import {
   restoreToLoop,
   emptyBin,
   previousSubjects,
+  interestCounts,
 } from '../services/keepwarm-store.js';
 import {
   generateEmails,
@@ -177,6 +178,31 @@ router.put('/settings', (req, res) => {
  * Filtering happens here rather than in the browser so the same search works
  * once the list runs to a few thousand rows.
  */
+/**
+ * GET /api/keepwarm/interests
+ *
+ * The lane cards: how many people in the loop are interested in each topic,
+ * and how many have nothing ticked.
+ *
+ * Counted over the audience that would actually receive an email, so the stage
+ * rule is already applied — a lane never shows somebody who is dead, opted out
+ * or at an excluded stage. Interest decides the topic; stage decides who is in
+ * the loop at all, and this endpoint never reverses that order.
+ *
+ * `everReceived` is the honest answer to "is this working yet". Zero means
+ * WorkTrackr has never sent the field, which is a different thing from
+ * everybody genuinely having nothing ticked, and the screen says so in those
+ * words rather than showing ten empty cards.
+ */
+router.get('/interests', (req, res) => {
+  try {
+    res.json(interestCounts());
+  } catch (err) {
+    console.error('[keepwarm] interest counts failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/audience', (req, res) => {
   try {
     const q = String(req.query.q || '').trim().toLowerCase();
