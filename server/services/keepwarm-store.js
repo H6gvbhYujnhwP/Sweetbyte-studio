@@ -207,6 +207,31 @@ db.exec(`
     ON keepwarm_interests(external_company_id);
 `);
 
+// The same tags, ticked against a COMPANY rather than a person.
+//
+// This is the common case and not the exception. WorkTrackr's "Interested in"
+// panel sits on the company record, and most companies have no people listed
+// under them at all — so a tick usually arrives with no name and no address
+// attached to it. Studio still has to decide which address goes in which card,
+// because the keep-warm list is a list of addresses.
+//
+// Held per company and resolved to addresses when the audience is built,
+// rather than written out to each address as the push arrives. Two reasons.
+// An address added to the loop tomorrow picks up its company's tags with no
+// second push, and a tick can be recorded for a company Studio has no address
+// for yet without inventing a row for somebody who does not exist.
+//
+// A person with their own tags in keepwarm_interests wins over the company's.
+// That way, if interests ever do get recorded against individual people in
+// WorkTrackr, those take effect immediately and nothing here has to change.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS keepwarm_company_interests (
+    external_company_id TEXT PRIMARY KEY,
+    interests           TEXT NOT NULL DEFAULT '[]',
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
 /**
  * The ten service interests, in the order the lanes are shown and the order a
  * person's topics are worked through.
@@ -273,6 +298,22 @@ export function interestsByEmail() {
       map.set(String(row.email).toLowerCase(), Array.isArray(parsed) ? parsed : []);
     } catch {
       map.set(String(row.email).toLowerCase(), []);
+    }
+  }
+  return map;
+}
+
+/**
+ * Company-level interests, as a Map keyed on the WorkTrackr company id.
+ */
+export function companyInterests() {
+  const map = new Map();
+  for (const row of db.prepare(`SELECT external_company_id, interests FROM keepwarm_company_interests`).all()) {
+    try {
+      const parsed = JSON.parse(row.interests || '[]');
+      map.set(String(row.external_company_id), Array.isArray(parsed) ? parsed : []);
+    } catch {
+      map.set(String(row.external_company_id), []);
     }
   }
   return map;
@@ -484,6 +525,14 @@ const RECEIPT_KEY = 'lastStageReceipt';
 export function applyStages({ companies, snapshot = false }) {
   const rows = Array.isArray(companies) ? companies.filter(c => c && c.id) : [];
 
+  const upsertCompanyInterests = db.prepare(`
+    INSERT INTO keepwarm_company_interests (external_company_id, interests, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(external_company_id) DO UPDATE SET
+      interests  = excluded.interests,
+      updated_at = datetime('now')
+  `);
+
   const upsertInterests = db.prepare(`
     INSERT INTO keepwarm_interests (email, external_company_id, interests, updated_at)
     VALUES (?, ?, ?, datetime('now'))
@@ -505,6 +554,7 @@ export function applyStages({ companies, snapshot = false }) {
 
   let cleared = 0;
   let interestRows = 0;
+  let companyRows = 0;
   let unknownKeys = 0;
 
   const tx = db.transaction((list) => {
@@ -519,6 +569,17 @@ export function applyStages({ companies, snapshot = false }) {
       // half-hourly reconciliation would wipe every tick between the two
       // deploys. An explicit empty list on a contact IS a change, and clears
       // that person's tags.
+      // The company's own ticks, which is where WorkTrackr's "Interested in"
+      // panel actually saves them. Same absent-versus-empty rule as below.
+      if (Array.isArray(c.interests)) {
+        const { kept, dropped } = normaliseInterests(c.interests);
+        if (dropped) unknownKeys += dropped;
+        upsertCompanyInterests.run(String(c.id), JSON.stringify(kept));
+        companyRows += 1;
+      }
+
+      // Tags recorded against a named person, if WorkTrackr ever sends any.
+      // These override the company's for that address.
       if (Array.isArray(c.contacts)) {
         for (const contact of c.contacts) {
           const email = String(contact?.email || '').trim().toLowerCase();
@@ -563,10 +624,11 @@ export function applyStages({ companies, snapshot = false }) {
   console.log(
     `[keepwarm] stages received: ${rows.length} company/companies` +
     `${snapshot ? ` (snapshot, ${cleared} cleared)` : ''}` +
-    `${interestRows ? `, interests for ${interestRows} contact(s)` : ''}` +
+    `${companyRows ? `, interests for ${companyRows} company/companies` : ''}` +
+    `${interestRows ? `, interests for ${interestRows} named contact(s)` : ''}` +
     `${unknownKeys ? `, ${unknownKeys} unknown interest key(s) ignored` : ''}`
   );
-  return { applied: rows.length, cleared, snapshot: !!snapshot, interests: interestRows, unknownInterestKeys: unknownKeys };
+  return { applied: rows.length, cleared, snapshot: !!snapshot, companyInterests: companyRows, contactInterests: interestRows, unknownInterestKeys: unknownKeys };
 }
 
 /**
@@ -773,9 +835,19 @@ export function buildAudience() {
   // either way, but it keeps the interest lookup out of the loop that decides
   // who gets emailed.
   const interests = interestsByEmail();
+  const byCompany = companyInterests();
 
   for (const row of rawAudience()) {
-    const p = project(row, interests.get(String(row.email).toLowerCase()));
+    // The person's own tags if WorkTrackr named them, otherwise the ticks made
+    // against their company. Falling back rather than merging: a tick recorded
+    // on a person is a more specific statement than one recorded on their
+    // company, and merging the two would mean nothing could ever be un-ticked
+    // for one person without un-ticking it for the whole company.
+    const own = interests.get(String(row.email).toLowerCase());
+    const resolved = (own && own.length)
+      ? own
+      : (byCompany.get(String(row.external_company_id || '')) || []);
+    const p = project(row, resolved);
 
     // Same ordering rule as stageCounts: a dead address is also suppressed, so
     // asking the wrong question first would label every bounce "unsubscribed".
