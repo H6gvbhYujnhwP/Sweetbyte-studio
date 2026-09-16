@@ -1,17 +1,51 @@
 /**
- * The ten subject areas a keep-warm email can be about.
+ * The nine subject areas a keep-warm email can be about.
  *
  * One is assigned to each email in a batch before the model is asked for
  * anything, which is what stops a batch of nine containing three variations on
  * the same idea. Nine emails means nine different areas, decided here rather
  * than hoped for in a prompt.
  *
+ * BACKUPS HAS BEEN REMOVED. It was the tenth area. Billy's decision, taken
+ * after reading a generated draft about restore testing: Sweetbyte is not
+ * sending keep-warm emails about backups. Deleted rather than switched off,
+ * which was the choice he was offered. Nothing else in the company knowledge
+ * base leads the model towards the subject on its own, so removing the entry
+ * removes the topic. Putting it back means putting this block back.
+ *
  * The supplied package carried a `subjectFamily` field on each of these, with
- * values like "Sweetbyte IT - Backups". It has been removed rather than passed
- * to the model: a hyphenated prefix on every subject line is exactly the
- * mass-mailing signal the subject rules exist to avoid, and showing the model a
- * field called subjectFamily is an invitation to use it as one.
+ * values like "Sweetbyte IT - Backups". The field has been removed, but the
+ * prefix itself has not: every generated subject line begins "Sweetbyte IT - ".
+ * That is a deliberate Studio decision, taken knowing it reads like a mailing
+ * tool, and SUBJECT_PREFIX below is the one copy of it. It is applied by the
+ * prompt and enforced by the validator, rather than being handed to the model
+ * as a field it can improvise around.
  */
+export const SUBJECT_PREFIX = 'Sweetbyte IT - ';
+
+/**
+ * Put the prefix on the front of a subject line, once.
+ *
+ * Used on the operator's own hand-written lines, which get the prefix and are
+ * otherwise left exactly as typed, exclamation marks and all. Also used as a
+ * safety net on a generated line the model returned without it.
+ */
+export function withSubjectPrefix(subject) {
+  const trimmed = String(subject || '').trim();
+  if (!trimmed) return trimmed;
+  return trimmed.startsWith(SUBJECT_PREFIX) ? trimmed : `${SUBJECT_PREFIX}${trimmed}`;
+}
+
+/**
+ * The subject without its prefix. Used where the prefix would distort a
+ * measurement — the character limit applies to the part somebody actually
+ * wrote, not to fifteen characters of standing boilerplate.
+ */
+export function stripSubjectPrefix(subject) {
+  const trimmed = String(subject || '').trim();
+  return trimmed.startsWith(SUBJECT_PREFIX) ? trimmed.slice(SUBJECT_PREFIX.length).trim() : trimmed;
+}
+
 export const CONTENT_PATTERNS = [
   {
     id: 'apps',
@@ -40,13 +74,6 @@ export const CONTENT_PATTERNS = [
     readerPain: 'Relying on one security product while overlooking people and process',
     usefulPoint: 'Security works best as several understandable layers',
     ctaPrompt: 'Invite one question about the area that is hardest to assess',
-  },
-  {
-    id: 'backups',
-    label: 'backup restore confidence',
-    readerPain: 'A backup may appear healthy until somebody needs to restore it',
-    usefulPoint: 'Monitoring and restore readiness matter as much as creating copies',
-    ctaPrompt: 'Suggest replying if the last successful restore test is unclear',
   },
   {
     id: 'microsoft_365',

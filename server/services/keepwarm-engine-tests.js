@@ -1,35 +1,51 @@
 /**
  * Run with:  node --test server/services/keepwarm-engine-tests.js
  *
- * The first five tests are the ones supplied with the engine package, with only
- * their import paths changed. The rest cover the changes made during
- * integration, each written from a failure found by running the package against
- * real Sweetbyte copy.
+ * The first tests are the ones supplied with the engine package, with their
+ * import paths changed and their fixtures brought up to the bulleted email
+ * shape. The rest cover the changes made during integration, each written from
+ * a failure found by running the package against real Sweetbyte copy.
+ *
+ * Nothing in here touches the network, the disk or the Anthropic SDK. The
+ * engine takes a model adapter, so the model is a fake that hands back
+ * prepared answers, and the conversion pair now lives in email-body-style.js,
+ * which has no dependencies.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARAGRAPH_STYLE } from './keepwarm-engine-prompts.js';
-import { parseJsonOnly, validateEmail, validateSubject } from './keepwarm-engine-validator.js';
+import { parseJsonOnly, validateEmail, validateSubject, unwrapJsonText } from './keepwarm-engine-validator.js';
 import { planSlots, KeepWarmEngine } from './keepwarm-engine-core.js';
-import { unwrapJsonText } from './keepwarm-engine-validator.js';
+import { CONTENT_PATTERNS, SUBJECT_PREFIX, withSubjectPrefix } from './keepwarm-engine-patterns.js';
+import { htmlToText, textToHtml } from './email-body-style.js';
 
-const knowledgeBase = `${'Sweetbyte provides managed IT support, websites, apps, cyber security, backups and Microsoft 365. '.repeat(10)} 25 years 99.9%`;
+const knowledgeBase = `${'Sweetbyte provides managed IT support, websites, apps, cyber security and Microsoft 365. '.repeat(10)} 25 years 99.9%`;
 
 const paragraphs = [
-  'Passwords are difficult to manage when every account needs a different strong password. Storing them in browsers, documents or messages can also make access harder to control when responsibilities change.',
-  'A business password manager gives authorised people one protected place to create, store and share credentials. It can make everyday access simpler while reducing the temptation to reuse memorable passwords across several services.',
-  'The same approach can make staff changes easier because access can be updated centrally. It also gives the business a clearer process than relying on informal notes or knowledge held by one person.',
-  'If password handling is an area you are reviewing, reply with the part that causes the most uncertainty and we can offer an informal view.',
+  'Passwords are difficult to manage when every account needs a different one. Storing them in browsers, documents or messages also makes access harder to control when responsibilities change.',
+  'A business password manager gives authorised people one protected place to create, store and share credentials, without anybody having to remember every login.',
+  'A password system usually earns its place on four counts:',
+  '• **Shared safely:** credentials can be given to a colleague without being emailed',
+  '• **Removed quickly:** access ends the day somebody leaves the business',
+  '• **Stronger by default:** long random passwords stop being a memory problem',
+  '• **Visible:** you can see which accounts exist and who reaches them',
+  'If password handling is something you are reviewing, reply with the part that causes the most uncertainty and we can offer an informal view.',
 ];
 
+/**
+ * The HTML half of a body, built from the plain half. The bold markers the
+ * operator sees in the editing box become the <strong> the message carries,
+ * which is the same conversion textToHtml does, so a fixture cannot drift from
+ * what the app would actually store.
+ */
 function html(paras) {
-  return paras.map(p => `<p style="${PARAGRAPH_STYLE}">${p}</p>`).join('');
+  return textToHtml(paras.join('\n\n'));
 }
 
 const valid = {
   angle: 'safer everyday password management',
-  subject: 'Sweetbyte IT - Safer Passwords',
+  subject: `${SUBJECT_PREFIX}Safer passwords`,
   plain: paragraphs.join('\n\n'),
   html: html(paragraphs),
 };
@@ -44,7 +60,7 @@ test('rejects markup, sign-offs and invented numbers', () => {
   const broken = {
     ...valid,
     plain: `${valid.plain}\n\nKind regards, call 01702 000000`,
-    html: `<strong>${valid.html}</strong>`,
+    html: `<em>${valid.html}</em>`,
   };
   const errors = validateEmail(broken, { knowledgeBase });
   assert.ok(errors.some(x => x.includes('sign-off')));
@@ -54,7 +70,7 @@ test('rejects markup, sign-offs and invented numbers', () => {
 
 test('rejects similar or spam-like subjects', () => {
   assert.ok(validateSubject('FREE offer!', []).length > 0);
-  assert.ok(validateSubject('Sweetbyte IT - Better Wi-Fi', ['Sweetbyte IT - Better Business Wi-Fi']).length > 0);
+  assert.ok(validateSubject(`${SUBJECT_PREFIX}Better Wi-Fi`, [`${SUBJECT_PREFIX}Better Business Wi-Fi`]).length > 0);
 });
 
 test('requires JSON only', () => {
@@ -63,11 +79,45 @@ test('requires JSON only', () => {
 });
 
 test('plans distinct slots deterministically', () => {
-  const first = planSlots({ count: 9, seed: '2026-09-15' });
-  const second = planSlots({ count: 9, seed: '2026-09-15' });
+  const count = CONTENT_PATTERNS.length;
+  const first = planSlots({ count, seed: '2026-09-15' });
+  const second = planSlots({ count, seed: '2026-09-15' });
   assert.deepEqual(first, second);
-  assert.equal(new Set(first.map(x => x.serviceId)).size, 9);
+  assert.equal(new Set(first.map(x => x.serviceId)).size, count);
   assert.equal(new Set(first.map(x => x.openingMove)).size, 5);
+});
+
+// ── Backups is no longer one of the subject areas ───────────────────────────
+
+test('there is no backups subject area for the planner to pick', () => {
+  assert.equal(CONTENT_PATTERNS.some(p => p.id === 'backups'), false);
+  const text = JSON.stringify(CONTENT_PATTERNS).toLowerCase();
+  assert.equal(text.includes('backup'), false, 'no slot may nudge the model towards backups');
+  assert.equal(text.includes('restore'), false);
+});
+
+test('a full batch still has one distinct area per email', () => {
+  const slots = planSlots({ count: 9, seed: 'any' });
+  assert.equal(new Set(slots.map(x => x.serviceId)).size, 9);
+});
+
+// ── Every subject carries the standing prefix ───────────────────────────────
+
+test('a generated subject without the prefix is refused', () => {
+  const errors = validateSubject('Safer passwords across the team', []);
+  assert.ok(errors.some(x => x.includes(SUBJECT_PREFIX)));
+});
+
+test('the character limit is measured after the prefix, not on it', () => {
+  const fortyEight = 'a'.repeat(48);
+  assert.deepEqual(validateSubject(`${SUBJECT_PREFIX}${fortyEight}`, []), []);
+  assert.ok(validateSubject(`${SUBJECT_PREFIX}${'a'.repeat(49)}`, []).some(x => x.includes('48-character')));
+});
+
+test('the prefix is put on once and never twice', () => {
+  assert.equal(withSubjectPrefix('Safer passwords'), `${SUBJECT_PREFIX}Safer passwords`);
+  assert.equal(withSubjectPrefix(`${SUBJECT_PREFIX}Safer passwords`), `${SUBJECT_PREFIX}Safer passwords`);
+  assert.equal(withSubjectPrefix('  Safer passwords  '), `${SUBJECT_PREFIX}Safer passwords`);
 });
 
 // ── The paragraph style is Studio's, not the package's Arial ────────────────
@@ -87,19 +137,123 @@ test('a body in any other paragraph style is refused', () => {
   assert.ok(errors.some(x => x.includes('invalid markup')));
 });
 
+// ── The bullet section ──────────────────────────────────────────────────────
+
+test('a body with no bullet section is refused', () => {
+  const noBullets = [
+    paragraphs[0],
+    paragraphs[1],
+    'A password system can make sharing safer, remove access the day somebody leaves, keep long random passwords out of anybody memory and show which accounts exist in the first place.',
+    'Most of the work is in the setting up rather than the running, and it tends to make the day to day simpler rather than more complicated for the people using it.',
+    'The same approach makes staff changes easier because access is updated in one place instead of several.',
+    'It also gives the business a clearer process than relying on notes held by one person.',
+    paragraphs[7],
+  ];
+  const errors = validateEmail({ ...valid, plain: noBullets.join('\n\n'), html: html(noBullets) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('bullet section')));
+});
+
+test('too many bullets is refused', () => {
+  const many = [
+    paragraphs[0], paragraphs[1], paragraphs[2],
+    '• **Shared safely:** credentials can be given to a colleague without being emailed',
+    '• **Removed quickly:** access ends the day somebody leaves the business',
+    '• **Stronger by default:** long random passwords stop being a memory problem',
+    '• **Visible:** you can see which accounts exist and who reaches them',
+    '• **One place:** everything sits in a single protected system',
+    '• **Simpler joining:** a new starter gets what they need on day one',
+    paragraphs[7],
+  ];
+  const errors = validateEmail({ ...valid, plain: many.join('\n\n'), html: html(many) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('bullet section')));
+});
+
+test('a bullet with no bold label is refused', () => {
+  const unlabelled = paragraphs.map(p => (p.startsWith('•') ? p.replace(/\*\*/g, '') : p));
+  const errors = validateEmail({ ...valid, plain: unlabelled.join('\n\n'), html: html(unlabelled) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('bold label')));
+});
+
+test('bold anywhere outside a bullet label is refused', () => {
+  const extraBold = [...paragraphs];
+  extraBold[1] = extraBold[1].replace('password manager', '**password manager**');
+  const errors = validateEmail({ ...valid, plain: extraBold.join('\n\n'), html: html(extraBold) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('nowhere else')));
+});
+
+test('bullets split apart by an ordinary paragraph are refused', () => {
+  const split = [
+    paragraphs[0], paragraphs[1], paragraphs[2],
+    paragraphs[3], paragraphs[4],
+    'That last point is the one most businesses find hardest to keep on top of as people come and go.',
+    paragraphs[5], paragraphs[6],
+    paragraphs[7],
+  ];
+  const errors = validateEmail({ ...valid, plain: split.join('\n\n'), html: html(split) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('sit together')));
+});
+
+test('hyphen bullets are refused rather than quietly accepted', () => {
+  const hyphens = paragraphs.map(p => p.replace(/^• /, '- '));
+  const errors = validateEmail({ ...valid, plain: hyphens.join('\n\n'), html: html(hyphens) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('not hyphens')));
+});
+
+test('an email may not end on a bullet point', () => {
+  // The call to action tucked into the last bullet, with no closing paragraph
+  // after it, is the shape a model falls into when it runs out of room. The
+  // email reads as a list that stops rather than as a message.
+  const noClose = paragraphs.slice(0, 7).concat(['• **Just reply:** tell us how passwords are handled now and we will give you an informal view']);
+  const errors = validateEmail({ ...valid, plain: noClose.join('\n\n'), html: html(noClose) }, { knowledgeBase });
+  assert.ok(errors.some(x => x.includes('close with a paragraph')), errors.join(' | '));
+});
+
+// ── Bold survives the editing box ───────────────────────────────────────────
+
+test('a bold label goes to the editing box as markers and comes back as a tag', () => {
+  const editable = htmlToText(valid.html, { keepBold: true });
+  assert.ok(editable.includes('• **Shared safely:** credentials'), editable);
+  assert.equal(textToHtml(editable), valid.html, 'an untouched draft must save back byte for byte');
+});
+
+test('an edited draft keeps its bold and its paragraph style', () => {
+  const edited = htmlToText(valid.html, { keepBold: true }).replace('colleague', 'coworker');
+  const saved = textToHtml(edited);
+  assert.ok(saved.includes('<strong>Shared safely:</strong>'));
+  assert.ok(saved.includes('coworker'));
+  assert.equal((saved.match(/<strong>/g) || []).length, 4);
+  assert.equal(validateEmail({ ...valid, plain: edited, html: saved }, { knowledgeBase }).length, 0);
+});
+
+test('the plain-text half of a real email has no asterisks in it', () => {
+  const sent = htmlToText(valid.html);
+  assert.equal(sent.includes('*'), false, sent);
+  assert.ok(sent.includes('• Shared safely: credentials'));
+});
+
+test('typed angle brackets are still escaped and a typed tag is not honoured', () => {
+  const saved = textToHtml('A & B <script>alert(1)</script> and <strong>not bold</strong>');
+  assert.ok(saved.includes('&amp;'));
+  assert.ok(saved.includes('&lt;script&gt;'));
+  assert.equal(saved.includes('<strong>'), false, 'only ** markers may produce bold');
+});
+
 // ── An email about telephones is allowed to mention a telephone call ────────
 
 const voipParagraphs = [
-  'A phone system that lives on one desk made sense when everybody was at that desk. It fits less well now that the same people are in the office some days and working elsewhere on others.',
-  'When a call comes in to a fixed handset, it rings in one place and nowhere else. Anybody at home or out on site is simply unreachable on the main number, and the usual workaround is somebody handing out a mobile number instead.',
-  'Modern telephony can follow a person across a desk phone, a mobile and a computer, so the same number reaches them wherever they happen to be working that day.',
-  'If your current system no longer fits how your team actually works, reply and tell us how it is set up now.',
+  'A phone system that lives on one desk made sense when everybody was at that desk. It fits less well now that the same people work in the office some days and elsewhere on others.',
+  'When a call comes in to a fixed handset, it rings in one place and nowhere else. Anybody working at home or out on site is unreachable on the main number.',
+  'Modern telephony tends to help in a few practical ways:',
+  '• **One number:** the same line reaches a desk phone, mobile or computer',
+  '• **Easy changes:** users can be added or removed as the team changes',
+  '• **Out of hours:** calls can follow a rule rather than a person',
+  'If your current system no longer fits how your team works, reply and tell us how it is set up now.',
 ];
 
 test('a body about phone calls is not mistaken for asking the reader to phone', () => {
   const voip = {
     angle: 'phones for flexible working',
-    subject: 'Does your phone system follow your team?',
+    subject: `${SUBJECT_PREFIX}Does your phone system follow you?`,
     plain: voipParagraphs.join('\n\n'),
     html: html(voipParagraphs),
   };
@@ -107,18 +261,18 @@ test('a body about phone calls is not mistaken for asking the reader to phone', 
 });
 
 test('a body with no call to action at all is refused', () => {
-  const noCta = [...voipParagraphs.slice(0, 3), 'Most systems can be changed over without any interruption to the working day, and the numbers themselves move across unchanged.'];
+  const noCta = [...voipParagraphs.slice(0, 6), 'Most systems can be changed over without any interruption to the working day, and the existing numbers move across unchanged.'];
   const errors = validateEmail(
-    { angle: 'phones for flexible working', subject: 'Phones that follow your team', plain: noCta.join('\n\n'), html: html(noCta) },
+    { angle: 'phones for flexible working', subject: `${SUBJECT_PREFIX}Phones that follow you`, plain: noCta.join('\n\n'), html: html(noCta) },
     { knowledgeBase },
   );
   assert.ok(errors.some(x => x.includes('call to action')));
 });
 
 test('a body asking for both a reply and a call is refused', () => {
-  const both = [...voipParagraphs.slice(0, 3), 'If that sounds familiar, reply to this email or give us a call and we can talk it through with you at whatever length suits.'];
+  const both = [...voipParagraphs.slice(0, 6), 'If that sounds familiar, reply to this email or give us a call and we can talk it through with you at whatever length suits.'];
   const errors = validateEmail(
-    { angle: 'phones for flexible working', subject: 'Phones that follow your team', plain: both.join('\n\n'), html: html(both) },
+    { angle: 'phones for flexible working', subject: `${SUBJECT_PREFIX}Phones that follow you`, plain: both.join('\n\n'), html: html(both) },
     { knowledgeBase },
   );
   assert.ok(errors.some(x => x.includes('both a reply and a call')));
@@ -127,8 +281,7 @@ test('a body asking for both a reply and a call is refused', () => {
 // ── The operator's own subject line is not the model's to judge ─────────────
 
 test("a hand-written subject line survives checks that would refuse a generated one", () => {
-  const ownLine = 'Fed up with IT support that only shows up when something breaks?!';
-  assert.ok(ownLine.length > 64, 'this fixture must be over the generated-subject limit');
+  const ownLine = withSubjectPrefix('Fed up with IT support that only shows up when something breaks?!');
   assert.ok(validateSubject(ownLine, []).length > 0, 'as a generated subject it would be refused');
 
   const email = { ...valid, subject: ownLine };
@@ -167,15 +320,20 @@ function fakeModel(responses) {
 }
 
 function goodEmail(subject, angle, paras) {
-  return { angle, subject, plain: paras.join('\n\n'), html: html(paras) };
+  return { angle, subject: withSubjectPrefix(subject), plain: paras.join('\n\n'), html: html(paras) };
 }
 
 test('a batch keeps the emails that passed and reports the one that did not', async () => {
-  const tooShort = { angle: 'backup restore confidence gap', subject: 'Is your backup tested?', plain: 'Far too short to be a keep-warm email.', html: html(['Far too short to be a keep-warm email.']) };
+  const tooShort = {
+    angle: 'one awkward repeated process',
+    subject: `${SUBJECT_PREFIX}Is that job still manual?`,
+    plain: 'Far too short to be a keep-warm email.',
+    html: html(['Far too short to be a keep-warm email.']),
+  };
   const batch = {
     emails: [
       goodEmail('Safer passwords across the team', 'safer everyday password management', paragraphs),
-      goodEmail('Does your phone system follow your team?', 'phones for flexible working', voipParagraphs),
+      goodEmail('Does your phone system follow you?', 'phones for flexible working', voipParagraphs),
       tooShort,
     ],
   };
@@ -208,23 +366,24 @@ test('generation refuses to run without a knowledge base', async () => {
   assert.equal(engine.model.calls.length, 0, 'the model must not be called at all');
 });
 
-test("a body is written under the operator's own line and the line comes back untouched", async () => {
-  const ownLine = 'Fed up with IT support that only shows up when something breaks?!';
-  const written = { ...valid, subject: ownLine };
-  const engine = new KeepWarmEngine(fakeModel([written]));
-  const result = await engine.writeFromSubject({ knowledgeBase, subject: ownLine });
-  assert.equal(result.subject, ownLine);
+test("a body is written under the operator's own line and the line comes back with the prefix on the front", async () => {
+  const typed = 'Fed up with IT support that only shows up when something breaks?!';
+  const expected = `${SUBJECT_PREFIX}${typed}`;
+  const engine = new KeepWarmEngine(fakeModel([{ ...valid, subject: expected }]));
+  const result = await engine.writeFromSubject({ knowledgeBase, subject: typed });
+  assert.equal(result.subject, expected);
+  assert.ok(result.subject.endsWith('breaks?!'), 'the wording is left exactly as typed');
 });
 
-test('a subject-only rewrite leaves the body alone', async () => {
-  const engine = new KeepWarmEngine(fakeModel([{ subject: 'When did you last test a restore?' }]));
-  const result = await engine.rewriteSubject({ knowledgeBase, body: valid.plain, currentSubject: 'Old line', rejectedSubjects: [] });
-  assert.equal(result.subject, 'When did you last test a restore?');
+test('a subject-only rewrite leaves the body alone and gets the prefix', async () => {
+  const engine = new KeepWarmEngine(fakeModel([{ subject: 'Where do your passwords live?' }]));
+  const result = await engine.rewriteSubject({ knowledgeBase, body: valid.plain, currentSubject: `${SUBJECT_PREFIX}Old line`, rejectedSubjects: [] });
+  assert.equal(result.subject, `${SUBJECT_PREFIX}Where do your passwords live?`);
   assert.equal(Object.keys(result).length, 1, 'nothing but the subject comes back');
 });
 
 test('a body-only rewrite keeps the subject exactly', async () => {
-  const subject = 'Sweetbyte IT - Safer Passwords';
+  const subject = `${SUBJECT_PREFIX}Safer passwords`;
   const engine = new KeepWarmEngine(fakeModel([{ ...valid, subject }]));
   const result = await engine.rewriteBody({ knowledgeBase, subject, plainBody: 'an older body' });
   assert.equal(result.subject, subject);

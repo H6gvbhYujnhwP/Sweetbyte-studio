@@ -1,26 +1,39 @@
 /**
  * Checks a generated email before it is ever allowed to become a draft.
  *
- * TWO CHANGES FROM THE SUPPLIED PACKAGE, both found by running it against real
- * Sweetbyte copy rather than against its own examples:
+ * FOUR THINGS HERE DIFFER FROM THE SUPPLIED PACKAGE, all of them found by
+ * running it against real Sweetbyte copy rather than against its own examples:
  *
  * 1. THE CALL-TO-ACTION COUNT. The package counted the bare word "call"
  *    anywhere in the body as a call-to-action, so a perfectly good email about
- *    business phones — one of the engine's own ten subject areas — failed,
- *    because "when a call comes in" is a sentence about telephones, not an
- *    invitation to ring anybody. It now looks for an actual invitation.
+ *    business phones — one of the engine's own subject areas — failed, because
+ *    "when a call comes in" is a sentence about telephones, not an invitation
+ *    to ring anybody. It now looks for an actual invitation.
  *
  * 2. THE OPERATOR'S OWN SUBJECT LINES. Studio lets Billy tick his own subject
- *    lines and writes bodies under them, passing the line through untouched.
- *    The package checked every subject against a 64-character limit, a spam
- *    word list and a no-exclamation-marks rule, which would have refused a
- *    hand-written line — and, because the line is not allowed to change, could
- *    never have recovered from it. A supplied fixed subject now skips the
- *    subject checks entirely and is only checked for having come back
- *    unaltered. That is a settled Studio decision, not an oversight here.
+ *    lines and writes bodies under them, passing the line through untouched
+ *    apart from the standing prefix. The package checked every subject against
+ *    a character limit, a spam word list and a no-exclamation-marks rule, which
+ *    would have refused a hand-written line — and, because the line is not
+ *    allowed to change, could never have recovered from it. A supplied fixed
+ *    subject skips the subject checks entirely and is only checked for having
+ *    come back unaltered. That is a settled Studio decision, not an oversight.
+ *
+ * 3. THE CHARACTER LIMIT IS MEASURED AFTER THE PREFIX. Every generated subject
+ *    now begins "Sweetbyte IT - ". Counting those fifteen standing characters
+ *    against a limit meant to keep a subject readable in an inbox would shorten
+ *    every subject line for no reason, so the limit applies to the part the
+ *    model actually wrote.
+ *
+ * 4. BULLETS AND BOLD ARE CHECKED, NOT BANNED. The first version of these rules
+ *    refused any line that looked like a list. An email now has to contain a
+ *    bullet section, and the checks below are what stop that turning into a
+ *    free-for-all: three to five bullets, together, each led by one short bold
+ *    label, and bold nowhere else in the email.
  */
 
 import { PARAGRAPH_STYLE } from './keepwarm-engine-prompts.js';
+import { SUBJECT_PREFIX, stripSubjectPrefix } from './keepwarm-engine-patterns.js';
 
 const FORBIDDEN_BODY_PATTERNS = [
   [/\bhi\s+(?:there|\{\{|[A-Z])/i, 'Do not include a greeting'],
@@ -33,7 +46,11 @@ const FORBIDDEN_BODY_PATTERNS = [
   [/\bSweetByte\b|\bSweet Byte\b/, 'Spell Sweetbyte correctly'],
   [/\b(?:specialize|specialized|optimization|defense|modernize|organization)\b/i, 'Use UK English spelling'],
   [/(?:https?:\/\/|www\.|mailto:)/i, 'Do not include links'],
-  [/^\s*(?:[-*•]|\d+[.)])\s+/m, 'Do not include lists'],
+  // The bullet character is now allowed and required. Hyphens, asterisks and
+  // numbers at the start of a line are still refused: they are what a model
+  // reaches for when it ignores the bullet format, and they arrive in Outlook
+  // as plain punctuation rather than as a list.
+  [/^\s*(?:[-*]|\d+[.)])\s+/m, 'Use bullet lines beginning with the bullet character, not hyphens, asterisks or numbers'],
 ];
 
 // An invitation to reply, and an invitation to telephone. Both are deliberately
@@ -43,6 +60,14 @@ const CTA_REPLY = /\breply\b|\bget in touch\b|\blet us know\b|\bdrop us a line\b
 const CTA_CALL = /\bgive (?:us|me) a (?:call|ring)\b|\bcall us\b|\bring us\b|\bphone us\b|\bcall the (?:number|office)\b|\bcall on the number\b/i;
 
 const SPAMMY_SUBJECT = /\b(?:free|act now|limited time|urgent|guaranteed|exclusive deal|buy now|offer|discount|save money|winner|cash|risk-free)\b/i;
+
+// One bullet, in each half of the email. The label is bold, ends in a colon,
+// and is followed by ordinary text. Anything else is not a bullet Studio wrote.
+const HTML_BULLET = /^•\s<strong>[^<>]{2,45}:<\/strong>\s\S/;
+const PLAIN_BULLET = /^•\s\*\*[^*\n]{2,45}:\*\*\s\S/;
+
+const MIN_BULLETS = 3;
+const MAX_BULLETS = 5;
 
 function decodeHtml(value) {
   return value
@@ -56,6 +81,16 @@ function decodeHtml(value) {
 
 function normaliseText(value) {
   return decodeHtml(value).replace(/\r/g, '').replace(/[ \t]+/g, ' ').trim();
+}
+
+/**
+ * The wording with its emphasis markers taken off, so the HTML half and the
+ * plain half can be compared on what the reader actually sees. <strong> in one
+ * and ** in the other is the single difference the rules allow between them,
+ * and it must not register as a mismatch.
+ */
+function withoutEmphasis(value) {
+  return String(value).replace(/<\/?strong>/gi, '').replace(/\*\*/g, '');
 }
 
 function extractHtmlParagraphs(html) {
@@ -87,11 +122,14 @@ export function similarity(a, b) {
 export function validateSubject(subject, doNotRepeat = []) {
   const errors = [];
   if (typeof subject !== 'string' || !subject.trim()) return ['Subject is missing'];
-  if (subject.length > 64) errors.push('Subject exceeds the 64-character hard limit');
+  if (!subject.startsWith(SUBJECT_PREFIX)) errors.push(`Subject must begin exactly "${SUBJECT_PREFIX}"`);
+  const written = stripSubjectPrefix(subject);
+  if (!written) errors.push('Subject is nothing but the prefix');
+  if (written.length > 48) errors.push('Subject exceeds the 48-character limit after the prefix');
   if (subject.includes('!') || subject.includes('—')) errors.push('Subject contains forbidden punctuation');
   if (/[^\p{L}\p{N}\p{P}\p{Zs}]/u.test(subject)) errors.push('Subject appears to contain emoji or symbols');
-  if (SPAMMY_SUBJECT.test(subject)) errors.push('Subject contains promotional or spam-like wording');
-  if (/SweetByte|Sweet Byte/.test(subject)) errors.push('Sweetbyte is misspelled');
+  if (SPAMMY_SUBJECT.test(written)) errors.push('Subject contains promotional or spam-like wording');
+  if (/SweetByte|Sweet Byte/.test(written)) errors.push('Sweetbyte is misspelled');
   for (const used of doNotRepeat) {
     if (subject.trim().toLowerCase() === used.trim().toLowerCase() || similarity(subject, used) >= 0.65) {
       errors.push(`Subject is too similar to a used or rejected subject: ${used}`);
@@ -127,15 +165,64 @@ export function validateEmail(email, { knowledgeBase, doNotRepeat = [], fixedSub
   for (const [pattern, message] of FORBIDDEN_BODY_PATTERNS) {
     if (pattern.test(email.plain) || pattern.test(email.html)) errors.push(message);
   }
-  if (/[^\p{L}\p{N}\p{P}\p{Zs}\n\r]/u.test(email.plain)) errors.push('Body appears to contain emoji or unsupported symbols');
+  if (/[^\p{L}\p{N}\p{P}\p{Zs}\n\r•]/u.test(email.plain)) errors.push('Body appears to contain emoji or unsupported symbols');
 
   const paragraphs = extractHtmlParagraphs(email.html);
-  if (paragraphs.length < 3 || paragraphs.length > 6) errors.push('HTML must contain three to six paragraphs');
+  if (paragraphs.length < 6 || paragraphs.length > 9) errors.push('HTML must contain six to nine paragraphs');
   const rebuilt = paragraphs.map(p => `<p style="${PARAGRAPH_STYLE}">${p}</p>`).join('');
   if (rebuilt !== email.html) errors.push('HTML contains invalid markup, spacing or paragraph styles');
+
+  // Inside a paragraph, a bold label is the only markup allowed. Taking the
+  // <strong> pairs out should leave text with no angle brackets in it at all.
+  for (const paragraph of paragraphs) {
+    if (/<[^>]*>/.test(paragraph.replace(/<strong>[^<>]+<\/strong>/g, ''))) {
+      errors.push('A paragraph contains markup other than a bold label');
+      break;
+    }
+  }
+
   const plainParagraphs = email.plain.replace(/\r/g, '').split(/\n\n+/).map(x => x.trim()).filter(Boolean);
-  if (normaliseText(paragraphs.map(decodeHtml).join('\n\n')) !== normaliseText(plainParagraphs.join('\n\n'))) {
+  if (normaliseText(withoutEmphasis(paragraphs.map(decodeHtml).join('\n\n')))
+      !== normaliseText(withoutEmphasis(plainParagraphs.join('\n\n')))) {
     errors.push('HTML and plain text wording do not match');
+  }
+
+  // ── The bullet section ────────────────────────────────────────────────────
+  const decoded = paragraphs.map(decodeHtml);
+  const bulletIndexes = decoded
+    .map((paragraph, index) => (paragraph.trim().startsWith('•') ? index : -1))
+    .filter(index => index >= 0);
+
+  if (bulletIndexes.length < MIN_BULLETS || bulletIndexes.length > MAX_BULLETS) {
+    errors.push(`Body must contain one bullet section of ${MIN_BULLETS} to ${MAX_BULLETS} bullet points, each beginning with the bullet character`);
+  }
+  if (bulletIndexes.length) {
+    const first = bulletIndexes[0];
+    if (!bulletIndexes.every((index, offset) => index === first + offset)) {
+      errors.push('The bullet points must sit together as one section');
+    }
+    if (first === 0) errors.push('The email must open with a paragraph, not with a bullet point');
+    if (bulletIndexes[bulletIndexes.length - 1] === decoded.length - 1) {
+      errors.push('The email must close with a paragraph, not with a bullet point');
+    }
+    for (const index of bulletIndexes) {
+      const htmlBullet = decoded[index].trim();
+      const plainBullet = (plainParagraphs[index] ?? '').trim();
+      if (!HTML_BULLET.test(htmlBullet)) {
+        errors.push('Each bullet must begin with one short bold label ending in a colon');
+      }
+      if (!PLAIN_BULLET.test(plainBullet)) {
+        errors.push('Each plain-text bullet must carry the matching **bold label:**');
+      }
+      const bulletWords = words(withoutEmphasis(htmlBullet).replace(/^•\s*/, '')).length;
+      if (bulletWords < 2 || bulletWords > 18) errors.push('Each bullet must contain 2 to 18 words');
+    }
+  }
+
+  const strongCount = (email.html.match(/<strong>/g) ?? []).length;
+  const plainBoldCount = Math.floor((email.plain.match(/\*\*/g) ?? []).length / 2);
+  if (strongCount !== bulletIndexes.length || plainBoldCount !== bulletIndexes.length) {
+    errors.push('Bold must appear once at the start of every bullet and nowhere else');
   }
 
   const invitesReply = CTA_REPLY.test(email.plain);

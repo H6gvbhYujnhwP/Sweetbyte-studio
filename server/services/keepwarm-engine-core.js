@@ -2,7 +2,7 @@
  * Orchestration: plan the batch, ask the model, check what came back, ask again
  * for anything that failed, hand over what is good.
  *
- * THREE CHANGES FROM THE SUPPLIED PACKAGE
+ * FOUR CHANGES FROM THE SUPPLIED PACKAGE
  *
  * 1. A SHORT BATCH IS NOT A FAILED BATCH. The package threw the whole batch
  *    away if a single email was still invalid after its repair attempts, so one
@@ -20,9 +20,15 @@
  *    has always been able to write a body under a line Billy typed himself. The
  *    package had no equivalent, and its nearest method would have refused the
  *    line for having an exclamation mark in it.
+ *
+ * 4. THE STANDING PREFIX IS APPLIED HERE, ONCE. Every subject line begins
+ *    "Sweetbyte IT - ". A generated line gets it from the prompt and is
+ *    rejected without it. A hand-written line is not the model's to touch, so
+ *    the prefix is put on the front before the model is ever asked for a body,
+ *    and the wording after it is whatever Billy typed.
  */
 
-import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES } from './keepwarm-engine-patterns.js';
+import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES, withSubjectPrefix } from './keepwarm-engine-patterns.js';
 import {
   buildSystemPrompt,
   buildBatchPrompt,
@@ -160,12 +166,13 @@ export class KeepWarmEngine {
   /**
    * Write the body for a subject line the operator typed.
    *
-   * The line is returned exactly as given. Nothing the model says about the
-   * subject is read back, and the subject checks do not run on it.
+   * The wording is returned exactly as given, with the standing prefix on the
+   * front. Nothing the model says about the subject is read back, and the
+   * subject checks do not run on it.
    */
   async writeFromSubject({ knowledgeBase, subject, doNotRepeat = [], slot = null }) {
     assertKnowledgeBase(knowledgeBase);
-    const fixed = String(subject || '').trim();
+    const fixed = withSubjectPrefix(subject);
     if (!fixed) throw new Error('No subject line given.');
 
     let candidate = parseJsonOnly(await this.model.complete({
@@ -197,9 +204,12 @@ export class KeepWarmEngine {
       temperature: 0.8,
     });
     const result = parseJsonOnly(raw);
-    const errors = validateSubject(result.subject, [currentSubject, ...rejectedSubjects].filter(Boolean));
+    // The prefix is not the model's to remember. A rewritten line that came
+    // back without it gets it, and is then checked like any generated subject.
+    const subject = withSubjectPrefix(result.subject);
+    const errors = validateSubject(subject, [currentSubject, ...rejectedSubjects].filter(Boolean));
     if (errors.length) throw new Error(`Invalid rewritten subject: ${errors.join('; ')}`);
-    return result;
+    return { subject };
   }
 
   async rewriteBody({ knowledgeBase, subject, plainBody }) {

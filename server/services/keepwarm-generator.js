@@ -50,7 +50,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { signatureHtml, disclaimerHtml } from './email-signature.js';
-import { FONT, P_STYLE } from './email-body-style.js';
+import { FONT, P_STYLE, htmlToText, textToHtml } from './email-body-style.js';
 import { KeepWarmEngine } from './keepwarm-engine-core.js';
 import { createKeepWarmModel } from './keepwarm-model.js';
 
@@ -140,69 +140,25 @@ ${disclaimerHtml()}
 
 // ── Plain text in, styled HTML out ───────────────────────────────────────────
 //
-// The operator edits plain paragraphs and never sees a tag. The inline styling
-// is not a choice anybody makes per email — it exists so Outlook's Word
-// renderer does not fall back to Times New Roman — so putting it in front of
-// somebody rewording a sentence is showing them plumbing they cannot usefully
-// change and can easily break.
+// Both functions moved to email-body-style.js, next to the paragraph style they
+// rebuild paragraphs with. They are re-exported here so every existing import
+// of them keeps working: keepwarm-sender.js takes the plain-text half of a
+// message from htmlToText, and the draft screen round-trips through both.
 //
-// This conversion lives here, on the server, next to P_STYLE. Doing it in the
-// browser would mean a second copy of the style string, and two copies of a
-// constant drift the moment one of them is edited.
+// Why they moved: the draft editor now has to carry bold labels through an
+// edit, which makes the pair the one piece of plumbing a bulleted email depends
+// on, and it could not be tested where it was. Importing this file reads the
+// company knowledge base off the disk and pulls in the Anthropic SDK, so a test
+// of the conversion needed a network library and a file on disk to do its job.
+// In email-body-style.js it has no dependencies at all.
 //
-// The round trip is lossless because the generated body is only ever plain
-// paragraphs — the prompts forbid headings, tables, links and inline emphasis
-// precisely so that stripping to text and rebuilding loses nothing. If a future
-// prompt ever reintroduces inline markup, this pair stops being safe and the
-// editor has to change with it.
+// htmlToText(html) gives the words with no asterisks, which is what goes out in
+// the plain-text half of a real email. htmlToText(html, { keepBold: true })
+// gives **Label:** for the editing box. The draft screen asks for the markers;
+// the sender does not.
 
-/**
- * Styled paragraphs → plain text, blank line between paragraphs.
- */
-export function htmlToText(html) {
-  return String(html || '')
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    // The signature is a table, so a row end has to become a line end or the
-    // whole thing arrives as one run-on sentence in the plain-text half of the
-    // email. Generated bodies contain only <p>, so this does nothing to the
-    // editor's round trip — it only matters once a signature is attached.
-    .replace(/<\s*\/\s*(tr|table|div)\s*>/gi, '</p>')
-    .replace(/<\s*\/\s*td\s*>/gi, ' ')
-    .split(/<\s*\/\s*p\s*>/i)
-    .map(chunk => chunk.replace(/<[^>]*>/g, ''))
-    .map(chunk => chunk
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
-      .replace(/&lt;/gi, '<')
-      .replace(/&gt;/gi, '>')
-      .replace(/&quot;/gi, '"')
-      .replace(/&#0?39;/gi, "'"))
-    .map(chunk => chunk.replace(/[ \t]+/g, ' ').trim())
-    .filter(Boolean)
-    .join('\n\n');
-}
+export { htmlToText, textToHtml };
 
-/**
- * Plain text → styled paragraphs.
- *
- * Escaping first is not optional. An ampersand or an angle bracket typed into
- * the box would otherwise be written into the message as markup, and the reader
- * would get a mangled sentence or a swallowed one.
- */
-export function textToHtml(text) {
-  const escape = (t) => String(t)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  return String(text || '')
-    .replace(/\r\n/g, '\n')
-    .split(/\n\s*\n/)
-    .map(p => p.trim())
-    .filter(Boolean)
-    .map(p => `<p style="${P_STYLE}">${escape(p).replace(/\n/g, '<br>')}</p>`)
-    .join('');
-}
 
 // ── The engine ───────────────────────────────────────────────────────────────
 //
