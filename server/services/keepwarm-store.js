@@ -144,6 +144,38 @@ db.exec(`
   );
 `);
 
+// Addresses taken out of the loop by hand.
+//
+// Why this exists rather than deleting the row: an address is in the loop for
+// one of two reasons, and they need opposite treatment.
+//
+// A hand-typed row lives in keepwarm_manual and nothing else refers to it, so
+// removing it really is a delete — and it has to be, because the address is
+// then free to be pasted back in corrected, which is the whole point.
+//
+// An address that is in the loop because an introduction was actually sent is
+// different: the row IS the send record. Deleting it would erase the email from
+// the send history, break the counts on the Sent tab, and make the service
+// email sender willing to send that person a SECOND introduction, because that
+// sender decides by asking whether a send row already exists. Precisely the
+// opposite of what removing somebody is meant to do.
+//
+// So for those, removal means hiding. The send record is untouched and the
+// address is listed here; the audience skips anything in this table. Put them
+// back and they rejoin with their history intact and no second introduction.
+//
+// Not the unsubscribe list, deliberately. Unsubscribes are one-way with no
+// undo, and recording the operator tidying up a list as an opt-out would
+// quietly inflate the opt-out figure — which is the number read as "the copy is
+// landing badly".
+db.exec(`
+  CREATE TABLE IF NOT EXISTS keepwarm_removed (
+    email      TEXT PRIMARY KEY,
+    removed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    reason     TEXT
+  );
+`);
+
 // The deliberate order of the approved queue.
 //
 // Until this existed, the Schedule tab was ordered by the moment you pressed
@@ -526,6 +558,7 @@ export function stageCounts() {
   counts.__none = 0;
   let suppressed = 0;
   let dead = 0;
+  let removed = 0;
 
   for (const row of rawAudience()) {
     // Dead is checked first because isSuppressed() now returns true for a dead
@@ -534,11 +567,15 @@ export function stageCounts() {
     // figure is one the operator reads as "the copy is landing badly".
     if (deadReasonFor(row.email)) { dead++; continue; }
     if (isSuppressed(row.email)) { suppressed++; continue; }
+    // Taken out by hand. Counted separately rather than against a stage,
+    // because the stage chips are there to answer "how generous is my rule",
+    // and somebody deliberately taken out is not evidence about that.
+    if (isRemovedFromLoop(row.email)) { removed++; continue; }
     const key = row.stage && ALL_STAGES.includes(row.stage) ? row.stage : '__none';
     counts[key] = (counts[key] || 0) + 1;
   }
 
-  return { counts, suppressed, dead };
+  return { counts, suppressed, dead, removed };
 }
 
 /**
@@ -570,6 +607,14 @@ export function buildAudience() {
     }
     if (isSuppressed(p.email)) {
       excluded.push({ ...p, reason: 'unsubscribed' });
+      continue;
+    }
+    // Checked after bounced and unsubscribed on purpose. Somebody who bounced
+    // and was also taken out by hand should read as bounced, because putting
+    // them back would not make them mailable and a Put back link that appears
+    // to do nothing is worse than no link.
+    if (isRemovedFromLoop(p.email)) {
+      excluded.push({ ...p, reason: 'removed by hand', removedByHand: true });
       continue;
     }
     if (!p.stage) {
@@ -764,12 +809,15 @@ export function addManualToLoop(text) {
      WHERE lower(to_email) = ? AND status = 'sent' LIMIT 1
   `);
   const hasManual = db.prepare('SELECT 1 FROM keepwarm_manual WHERE email = ?');
+  const isHidden = db.prepare('SELECT 1 FROM keepwarm_removed WHERE email = ?');
+  const unhide = db.prepare('DELETE FROM keepwarm_removed WHERE email = ?');
   const insert = db.prepare(`
     INSERT INTO keepwarm_manual (email, external_company_id, company_name, contact_name)
     VALUES (?, ?, ?, ?)
   `);
 
   const added = [];
+  const restored = [];
   const skipped = [];
   const seen = new Set();
 
@@ -781,6 +829,20 @@ export function addManualToLoop(text) {
       const deadWhy = deadReasonFor(r.email);
       if (deadWhy)                  { skipped.push({ ...r, reason: `bounced — ${deadWhy.toLowerCase()}` }); continue; }
       if (isSuppressed(r.email))    { skipped.push({ ...r, reason: 'unsubscribed' }); continue; }
+
+      // Somebody taken out of the loop by hand, being pasted back in. Pasting
+      // is how you put a corrected line in, so it has to be how you put a
+      // person back too — otherwise removing a sent contact is a one-way door
+      // and the paste just says "already in the loop" for ever.
+      if (isHidden.get(r.email)) {
+        unhide.run(r.email);
+        if (!hasSend.get(r.email) && !hasManual.get(r.email)) {
+          insert.run(r.email, r.companyId, r.companyName, r.contactName);
+        }
+        restored.push(r);
+        continue;
+      }
+
       if (hasSend.get(r.email))     { skipped.push({ ...r, reason: 'already in the loop' }); continue; }
       if (hasManual.get(r.email))   { skipped.push({ ...r, reason: 'already added by hand' }); continue; }
 
@@ -792,6 +854,7 @@ export function addManualToLoop(text) {
 
   return {
     added:      added.length,
+    restored:   restored.length,
     skipped,
     unreadable,
     // Added, but with no company id, so no sales stage. The screen warns about
@@ -817,6 +880,122 @@ export function removeManual(email) {
 export function removeAllManual() {
   const res = db.prepare('DELETE FROM keepwarm_manual').run();
   return { ok: true, removed: res.changes };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Taking somebody out of the loop
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Is this address currently hidden from the loop by hand? */
+export function isRemovedFromLoop(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return false;
+  return !!db.prepare('SELECT 1 FROM keepwarm_removed WHERE email = ?').get(e);
+}
+
+/**
+ * What the confirmation box needs to say before anything is removed.
+ *
+ * The point of asking is not to slow the operator down — it is that the two
+ * kinds of removal have genuinely different consequences, and which one applies
+ * is not visible on the row. A row that says "added by hand" is a clean delete;
+ * a row that looks identical but has a send behind it is not. The box has to
+ * say which, in words, before the button is pressed.
+ */
+export function loopRemovalInfo(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return { error: 'no_email' };
+
+  const intro = db.prepare(`
+    SELECT MIN(sent_at) AS first_sent_at, COUNT(*) AS n
+      FROM service_email_sends
+     WHERE lower(to_email) = ? AND status = 'sent'
+  `).get(e);
+
+  const keepWarm = db.prepare(`
+    SELECT COUNT(*) AS n, MAX(sent_at) AS last_sent_at
+      FROM keepwarm_recipients
+     WHERE lower(email) = ? AND status = 'sent'
+  `).get(e);
+
+  const manual = db.prepare(`
+    SELECT company_name, contact_name FROM keepwarm_manual WHERE email = ?
+  `).get(e);
+
+  const row = rawAudience().find(r => r.email === e);
+  const p = row ? project(row) : null;
+
+  const introCount = intro?.n || 0;
+
+  return {
+    email:          e,
+    contactName:    p?.contactName || manual?.contact_name || null,
+    companyName:    p?.companyName || manual?.company_name || null,
+    addedByHand:    !!manual,
+    introSent:      introCount > 0,
+    introSentAt:    intro?.first_sent_at || null,
+    introCount,
+    keepWarmSent:   keepWarm?.n || 0,
+    keepWarmLastAt: keepWarm?.last_sent_at || null,
+    alreadyRemoved: isRemovedFromLoop(e),
+    // What pressing the button will actually do. Decided here rather than on
+    // the screen, so the wording in the box and the behaviour behind it cannot
+    // drift apart.
+    action:         introCount > 0 ? 'hide' : 'delete',
+  };
+}
+
+/**
+ * Take an address out of the loop.
+ *
+ * Two behaviours under one button, chosen by whether anything was ever sent:
+ *
+ *   nothing sent — the row only exists because it was typed in, so it is
+ *     deleted outright and the address is free to be pasted back in corrected.
+ *
+ *   an introduction was sent — the send record stays exactly where it is and
+ *     the address is hidden instead. The history is intact, the Sent tab is
+ *     unchanged, and the service email sender still refuses to introduce them
+ *     a second time. Put them back and they rejoin with no new introduction.
+ *
+ * The hand-typed row is deleted in both cases. Where there is a send behind it
+ * the manual row was never the thing keeping them in the loop anyway, and
+ * leaving it would mean the address stayed blocked from a corrected paste.
+ */
+export function removeFromLoop(email, reason = null) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return { error: 'no_email' };
+
+  const info = loopRemovalInfo(e);
+
+  const run = db.transaction(() => {
+    const manual = db.prepare('DELETE FROM keepwarm_manual WHERE email = ?').run(e);
+    let hidden = 0;
+    if (info.introSent) {
+      hidden = db.prepare(`
+        INSERT INTO keepwarm_removed (email, reason) VALUES (?, ?)
+        ON CONFLICT(email) DO UPDATE SET removed_at = datetime('now'), reason = excluded.reason
+      `).run(e, reason).changes;
+    }
+    return { manualDeleted: manual.changes, hidden };
+  });
+
+  const res = run();
+  return { ok: true, action: info.action, ...res, info };
+}
+
+/**
+ * Put a hidden address back into the loop.
+ *
+ * Only ever undoes a hide. There is nothing to undo for a deleted hand-typed
+ * row — that address is free, and putting it back means pasting it again, which
+ * is the same thing the operator would do to correct it.
+ */
+export function restoreToLoop(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return { error: 'no_email' };
+  const res = db.prepare('DELETE FROM keepwarm_removed WHERE email = ?').run(e);
+  return { ok: true, restored: res.changes };
 }
 
 /** Everyone added by hand, newest first, for the "By hand" list. */

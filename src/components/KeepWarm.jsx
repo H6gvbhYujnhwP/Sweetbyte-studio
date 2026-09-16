@@ -176,7 +176,7 @@ function StageChip({ stage, onToggle }) {
 // `selectable` is only ever true for the in-the-loop list. The excluded list
 // has nothing to tick — those people are already out, and a tickbox beside
 // somebody who has unsubscribed would suggest you could tick them back in.
-function AudienceRow({ row, selectable = false, checked = true, onToggle }) {
+function AudienceRow({ row, selectable = false, checked = true, onToggle, onRemove, onRestore, busy }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -205,6 +205,32 @@ function AudienceRow({ row, selectable = false, checked = true, onToggle }) {
         background: row.reason ? '#eeeeec' : SB.tint,
         padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap',
       }}>{row.reason || row.stageLabel}</span>
+      {row.removedByHand && onRestore && (
+        <button
+          onClick={() => onRestore(row.email)}
+          disabled={busy}
+          title="Put this person back into the loop"
+          style={{
+            fontSize: 13, color: busy ? TERTIARY : SB.dark, background: 'none', border: 'none',
+            cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+          }}
+        >
+          Put back
+        </button>
+      )}
+      {!row.removedByHand && onRemove && (
+        <button
+          onClick={() => onRemove(row.email)}
+          disabled={busy}
+          title="Take this person out of the loop"
+          style={{
+            fontSize: 13, color: busy ? TERTIARY : DANGER, background: 'none', border: 'none',
+            cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+          }}
+        >
+          Remove
+        </button>
+      )}
     </div>
   );
 }
@@ -304,10 +330,18 @@ function ManualResult({ result }) {
   }
   return (
     <div style={{ marginTop: 12 }}>
-      <Banner tone={result.added ? 'good' : 'warn'}>
-        {result.added
-          ? `${result.added} ${result.added === 1 ? 'address' : 'addresses'} added to the loop.`
-          : 'Nothing was added.'}
+      <Banner tone={(result.added || result.restored) ? 'good' : 'warn'}>
+        {[
+          result.added
+            ? `${result.added} ${result.added === 1 ? 'address' : 'addresses'} added to the loop.`
+            : null,
+          // Somebody who had been taken out of the loop by hand and has now been
+          // pasted back in. Said separately from "added", because nothing new
+          // was created and no introduction will be sent to them.
+          result.restored
+            ? `${result.restored} ${result.restored === 1 ? 'address' : 'addresses'} put back into the loop.`
+            : null,
+        ].filter(Boolean).join(' ') || 'Nothing was added.'}
         {result.noCompanyId > 0 && ` ${result.noCompanyId} of them had no company id, so they have no sales
            stage — tick "No stage set" above to include them, or add the company id and they will pick
            up their stage from WorkTrackr automatically.`}
@@ -1320,6 +1354,9 @@ export default function KeepWarm() {
   // Adding addresses to the loop by hand.
   const [manualText, setManualText] = useState('');
   const [manualBusy, setManualBusy] = useState(false);
+  // Locks the Remove and Put back links on the audience list while one is in
+  // flight, so a double click cannot fire two removals at the same address.
+  const [loopBusy, setLoopBusy] = useState(false);
   const [manualResult, setManualResult] = useState(null);
   const [manualRows, setManualRows] = useState(null);
 
@@ -1490,6 +1527,81 @@ export default function KeepWarm() {
       await loadManual();
     } catch { /* the reload below shows the truth either way */ }
     finally { setManualBusy(false); }
+  }
+
+  // Taking somebody out of the loop.
+  //
+  // The confirmation is built from what the server says about that address, not
+  // from what the row happens to show, because the thing that decides whether
+  // this is a delete or a hide — whether an introduction was ever sent — is not
+  // on the row. Asking first also means the sentence the operator reads comes
+  // from the same place as the behaviour behind it.
+  async function removeFromLoop(email) {
+    setLoopBusy(true);
+    try {
+      const infoRes = await fetch(`/api/keepwarm/loop/removal-info?email=${encodeURIComponent(email)}`);
+      if (!infoRes.ok) throw new Error('Could not look that address up');
+      const info = await infoRes.json();
+
+      const who = [info.contactName, info.companyName].filter(Boolean).join(' at ');
+      const lines = [`Remove ${email} from the loop?`, ''];
+      if (who) lines.push(who, '');
+
+      if (info.introSent) {
+        const sent = info.introSentAt ? ` on ${fmtDate(info.introSentAt)}` : '';
+        const kw = info.keepWarmSent;
+        lines.push(
+          `An introduction email was sent${sent}` +
+          (kw ? `, and ${kw} keep-warm ${kw === 1 ? 'email' : 'emails'} since.` : '.') +
+          ' Those records stay exactly as they are.',
+          '',
+          'They stop receiving keep-warm emails. Add them back later and they will not be sent a second introduction.',
+        );
+      } else {
+        lines.push(
+          'No email has ever been sent to this address.',
+          '',
+          'It will be deleted and the address freed, so you can paste a corrected line straight away.',
+        );
+      }
+
+      if (!window.confirm(lines.join('\n'))) return;
+
+      const r = await fetch('/api/keepwarm/loop/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!r.ok) throw new Error('Could not remove');
+      await loadOverview();
+      await loadAudience(listMode, search);
+      await loadManual();
+    } catch (err) {
+      window.alert(err.message || 'Could not remove that address.');
+    } finally {
+      setLoopBusy(false);
+    }
+  }
+
+  // Undoing a hide. Nothing to confirm — it puts somebody back where they were
+  // and sends nothing.
+  async function putBackInLoop(email) {
+    setLoopBusy(true);
+    try {
+      const r = await fetch('/api/keepwarm/loop/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!r.ok) throw new Error('Could not put that address back');
+      await loadOverview();
+      await loadAudience(listMode, search);
+      await loadManual();
+    } catch (err) {
+      window.alert(err.message || 'Could not put that address back.');
+    } finally {
+      setLoopBusy(false);
+    }
   }
 
   async function moveSlot(draftId, direction) {
@@ -2113,6 +2225,9 @@ export default function KeepWarm() {
                           selectable={listMode === 'included'}
                           checked={isChecked(r.email)}
                           onToggle={toggleOne}
+                          onRemove={removeFromLoop}
+                          onRestore={putBackInLoop}
+                          busy={loopBusy}
                         />
                       ))}
                       {audience && audience.rows.length === 0 && (

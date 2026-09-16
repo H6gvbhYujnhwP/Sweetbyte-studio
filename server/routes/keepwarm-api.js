@@ -43,7 +43,11 @@ import {
   moveDraftInSchedule,
   addManualToLoop,
   removeManual,
+  removeAllManual,
   listManual,
+  loopRemovalInfo,
+  removeFromLoop,
+  restoreToLoop,
   emptyBin,
   previousSubjects,
 } from '../services/keepwarm-store.js';
@@ -448,7 +452,7 @@ router.get('/drafts/:id', (req, res) => {
       draft: row,
       // The editable form of the body. The operator works in plain paragraphs;
       // the inline styling is put back on save, so no tag ever reaches the screen.
-      bodyText: htmlToText(row.html_body),
+      bodyText: htmlToText(row.html_body, { keepBold: true }),
       preview: renderEmailHtml({ bodyHtml: row.html_body, firstName: null }),
     });
   } catch (err) {
@@ -487,7 +491,7 @@ router.put('/drafts/:id', (req, res) => {
 
     res.json({
       draft: result,
-      bodyText: htmlToText(result.html_body),
+      bodyText: htmlToText(result.html_body, { keepBold: true }),
       preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
     });
   } catch (err) {
@@ -552,7 +556,7 @@ router.post('/drafts/:id/regenerate', async (req, res) => {
 
     res.json({
       draft: result,
-      bodyText: htmlToText(result.html_body),
+      bodyText: htmlToText(result.html_body, { keepBold: true }),
       preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
     });
   } catch (err) {
@@ -620,6 +624,63 @@ router.post('/manual/remove', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[keepwarm] manual remove failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /loop/removal-info?email=...
+ *
+ * What the confirmation box says before anything happens: who this is, whether
+ * an introduction was ever sent to them, how many keep-warm emails they have
+ * had, and which of the two removals pressing the button will perform.
+ *
+ * The decision is made here rather than on the screen so that the sentence the
+ * operator reads and the thing that actually happens cannot drift apart.
+ */
+router.get('/loop/removal-info', (req, res) => {
+  try {
+    const result = loopRemovalInfo(req.query.email);
+    if (result.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] removal info failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /loop/remove  { email }
+ *
+ * Take somebody out of the loop. Deletes a hand-typed row outright; hides an
+ * address that has a real send behind it, leaving the send history alone.
+ */
+router.post('/loop/remove', (req, res) => {
+  try {
+    const result = removeFromLoop((req.body || {}).email);
+    if (result.error) return res.status(400).json(result);
+    console.log(`[keepwarm] removed ${result.info.email} from the loop (${result.action})`);
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] loop remove failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /loop/restore  { email }
+ *
+ * Put a hidden address back. Only undoes a hide — a deleted hand-typed row is
+ * put back by pasting it in again, which is the same thing you would do to
+ * correct it.
+ */
+router.post('/loop/restore', (req, res) => {
+  try {
+    const result = restoreToLoop((req.body || {}).email);
+    if (result.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] loop restore failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
