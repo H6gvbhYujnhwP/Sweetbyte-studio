@@ -176,6 +176,141 @@ db.exec(`
   );
 `);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Service interests, as ticked on a person in WorkTrackr
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Keyed on the EMAIL ADDRESS, not the company. The tags are ticked against a
+// person in WorkTrackr, and a company with three contacts can have three
+// different lists. Keying this on the company would mean Sue's ticks and
+// Dave's ticks becoming one pile, and both of them being emailed about the
+// other one's interests. The keep-warm audience is a list of addresses
+// already, so an address is the thing that lines up.
+//
+// The keys are permanent and the labels are not. Only keys are stored; the
+// label is looked up for display, so renaming "Business internet" later is a
+// one-line change here and never a migration.
+//
+// An address Studio has never been told about simply has no row, which reads
+// as nothing ticked. That is also the state everybody is in until WorkTrackr
+// starts sending the field, which is why nothing here refuses to work without
+// it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS keepwarm_interests (
+    email               TEXT PRIMARY KEY,
+    external_company_id TEXT,
+    interests           TEXT NOT NULL DEFAULT '[]',
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_kw_interests_company
+    ON keepwarm_interests(external_company_id);
+`);
+
+/**
+ * The ten service interests, in the order the lanes are shown and the order a
+ * person's topics are worked through.
+ *
+ * Order matters twice over. It is the order the cards appear in, and it is the
+ * order somebody with several interests receives them: ticked for Website and
+ * Microsoft 365, they get Website first because it comes first in this list.
+ * Moving a line moves both. Deliberate, so there is one answer to "which one
+ * comes next" rather than a hidden rule about which tag was tapped first.
+ */
+export const INTEREST_KEYS = [
+  { key: 'it_support',     label: 'IT support' },
+  { key: 'cyber_security', label: 'Cyber security' },
+  { key: 'internet',       label: 'Business internet' },
+  { key: 'wifi',           label: 'Managed Wi-Fi' },
+  { key: 'website',        label: 'Website' },
+  { key: 'domains',        label: 'Domains & hosting' },
+  { key: 'backups',        label: 'Backups' },
+  { key: 'microsoft_365',  label: 'Microsoft 365' },
+  { key: 'voip',           label: 'VoIP telephony' },
+  { key: 'custom_apps',    label: 'Custom apps & automation' },
+];
+
+const KNOWN_INTERESTS = new Set(INTEREST_KEYS.map(x => x.key));
+
+export function interestLabel(key) {
+  return INTEREST_KEYS.find(x => x.key === key)?.label || key;
+}
+
+/**
+ * Clean a list of interest keys arriving from WorkTrackr.
+ *
+ * Tolerant on purpose, per the agreed rule for this bridge: anything Studio
+ * does not recognise is dropped rather than refused. A new tag added in
+ * WorkTrackr before Studio knows about it must not be able to fail a stage
+ * push, because a failed stage push means dead companies keep getting emailed.
+ * The dropped keys are counted so the log can say it happened.
+ */
+export function normaliseInterests(value) {
+  const list = Array.isArray(value) ? value : [];
+  const kept = [];
+  let dropped = 0;
+  for (const raw of list) {
+    const key = String(raw || '').trim().toLowerCase();
+    if (!key) continue;
+    if (!KNOWN_INTERESTS.has(key)) { dropped += 1; continue; }
+    if (!kept.includes(key)) kept.push(key);
+  }
+  // Stored in list order, not arrival order, so "their next topic" is decided
+  // by INTEREST_KEYS and not by the order somebody happened to tap.
+  kept.sort((a, b) => INTEREST_KEYS.findIndex(x => x.key === a) - INTEREST_KEYS.findIndex(x => x.key === b));
+  return { kept, dropped };
+}
+
+/**
+ * Everything Studio knows about who is interested in what, as a Map keyed on
+ * the lowercased address. Read once per screen rather than per row.
+ */
+export function interestsByEmail() {
+  const map = new Map();
+  for (const row of db.prepare(`SELECT email, interests FROM keepwarm_interests`).all()) {
+    try {
+      const parsed = JSON.parse(row.interests || '[]');
+      map.set(String(row.email).toLowerCase(), Array.isArray(parsed) ? parsed : []);
+    } catch {
+      map.set(String(row.email).toLowerCase(), []);
+    }
+  }
+  return map;
+}
+
+/**
+ * How many people in the loop sit in each lane, plus how many have nothing
+ * ticked at all.
+ *
+ * Counted over the audience that would actually receive an email, not over
+ * everything Studio holds. A lane card showing people who are dead, opted out
+ * or at an excluded stage would be promising a send that cannot happen.
+ *
+ * Somebody with three tags is counted in three lanes. The totals therefore add
+ * up to more than the audience, which is correct: the lanes are topics, not a
+ * division of the list.
+ */
+export function interestCounts() {
+  const { included } = buildAudience();
+  const counts = {};
+  for (const { key } of INTEREST_KEYS) counts[key] = 0;
+  let none = 0;
+
+  for (const person of included) {
+    const list = person.interests || [];
+    if (!list.length) { none += 1; continue; }
+    for (const key of list) if (key in counts) counts[key] += 1;
+  }
+
+  return {
+    counts,
+    none,
+    audienceTotal: included.length,
+    keys: INTEREST_KEYS,
+    everReceived: db.prepare(`SELECT COUNT(*) AS n FROM keepwarm_interests`).get()?.n || 0,
+  };
+}
+
 // The deliberate order of the approved queue.
 //
 // Until this existed, the Schedule tab was ordered by the moment you pressed
@@ -349,6 +484,15 @@ const RECEIPT_KEY = 'lastStageReceipt';
 export function applyStages({ companies, snapshot = false }) {
   const rows = Array.isArray(companies) ? companies.filter(c => c && c.id) : [];
 
+  const upsertInterests = db.prepare(`
+    INSERT INTO keepwarm_interests (email, external_company_id, interests, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(email) DO UPDATE SET
+      external_company_id = excluded.external_company_id,
+      interests           = excluded.interests,
+      updated_at          = datetime('now')
+  `);
+
   const upsert = db.prepare(`
     INSERT INTO keepwarm_stages (external_company_id, company_name, primary_contact, stage, refreshed_at)
     VALUES (?, ?, ?, ?, datetime('now'))
@@ -360,10 +504,31 @@ export function applyStages({ companies, snapshot = false }) {
   `);
 
   let cleared = 0;
+  let interestRows = 0;
+  let unknownKeys = 0;
 
   const tx = db.transaction((list) => {
     for (const c of list) {
       upsert.run(String(c.id), c.name || null, c.primaryContact || null, c.stage || null);
+
+      // The interests ride in on the same payload, one entry per contact.
+      //
+      // Absent is not the same as empty, and the difference matters. A payload
+      // with no contacts array at all is WorkTrackr not sending the field yet,
+      // and must leave whatever Studio already holds alone — otherwise the
+      // half-hourly reconciliation would wipe every tick between the two
+      // deploys. An explicit empty list on a contact IS a change, and clears
+      // that person's tags.
+      if (Array.isArray(c.contacts)) {
+        for (const contact of c.contacts) {
+          const email = String(contact?.email || '').trim().toLowerCase();
+          if (!email) continue;
+          const { kept, dropped } = normaliseInterests(contact.interests);
+          if (dropped) unknownKeys += dropped;
+          upsertInterests.run(email, String(c.id), JSON.stringify(kept));
+          interestRows += 1;
+        }
+      }
     }
 
     if (snapshot) {
@@ -395,8 +560,13 @@ export function applyStages({ companies, snapshot = false }) {
     snapshot: !!snapshot,
   });
 
-  console.log(`[keepwarm] stages received: ${rows.length} company/companies${snapshot ? ` (snapshot, ${cleared} cleared)` : ''}`);
-  return { applied: rows.length, cleared, snapshot: !!snapshot };
+  console.log(
+    `[keepwarm] stages received: ${rows.length} company/companies` +
+    `${snapshot ? ` (snapshot, ${cleared} cleared)` : ''}` +
+    `${interestRows ? `, interests for ${interestRows} contact(s)` : ''}` +
+    `${unknownKeys ? `, ${unknownKeys} unknown interest key(s) ignored` : ''}`
+  );
+  return { applied: rows.length, cleared, snapshot: !!snapshot, interests: interestRows, unknownInterestKeys: unknownKeys };
 }
 
 /**
@@ -518,9 +688,13 @@ function rawAudience() {
     String(b.last_sent_at || b.added_at || '').localeCompare(String(a.last_sent_at || a.added_at || '')));
 }
 
-function project(row) {
+function project(row, interests = null) {
   return {
     email:             row.email,
+    // What this person is interested in, as ticked on them in WorkTrackr.
+    // Empty until WorkTrackr starts sending the field, which puts everybody in
+    // the "nothing ticked" lane and is the correct state until then.
+    interests:         interests || [],
     contactName:       row.contact_name || row.primary_contact || null,
     referrerName:      row.referrer_name || null,
     // What the email will actually say. Resolved once, here, so the list on
@@ -595,8 +769,13 @@ export function buildAudience() {
   const included = [];
   const excluded = [];
 
+  // Read once for the whole list rather than per person. A few hundred rows
+  // either way, but it keeps the interest lookup out of the loop that decides
+  // who gets emailed.
+  const interests = interestsByEmail();
+
   for (const row of rawAudience()) {
-    const p = project(row);
+    const p = project(row, interests.get(String(row.email).toLowerCase()));
 
     // Same ordering rule as stageCounts: a dead address is also suppressed, so
     // asking the wrong question first would label every bounce "unsubscribed".

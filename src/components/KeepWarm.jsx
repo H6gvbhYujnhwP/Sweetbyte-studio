@@ -21,6 +21,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useCallback } from 'react';
 import { SB } from '../brand.js';
+import KeepWarmLanes from './KeepWarmLanes.jsx';
 
 const TEXT      = '#1a1a1a';
 const MUTED     = '#666';
@@ -1201,6 +1202,11 @@ function SentView({ runs, openId, onOpen, recipients }) {
 
 export default function KeepWarm() {
   const [tab, setTab]             = useState('audience');
+  // Which service-interest lane is selected, or null for all of them. Held
+  // here rather than inside the cards because the audience list below has to
+  // narrow to match, and two pieces of the screen reading one value is the
+  // only way they cannot disagree about which lane is showing.
+  const [lane, setLane]           = useState(null);
   const [overview, setOverview]   = useState(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
@@ -2039,6 +2045,8 @@ export default function KeepWarm() {
           Sweetbyte stays in mind while they are still deciding. Nothing goes out on a timer —
           Studio lines the next one up and you press send.
         </p>
+
+        <KeepWarmLanes selected={lane} onSelect={setLane} />
 
         <TabBar tab={tab} onPick={setTab} />
 
