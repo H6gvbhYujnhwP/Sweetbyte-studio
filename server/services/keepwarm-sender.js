@@ -48,7 +48,7 @@ import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
-import { buildAudience, getDraft, draftSkips, SCHEDULE_ORDER } from './keepwarm-store.js';
+import { buildAudience, getDraft, draftSkips, emailedThisFortnight, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
 import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
@@ -308,6 +308,18 @@ export function queueRun(draftId, { only = null, exclude = null } = {}) {
   // moment the run is queued, before the operator's ticks are even read.
   let recipients = laneOf(included, draft.interest);
   if (!recipients.length) return { ok: false, reason: 'empty_lane' };
+
+  // ONE EMAIL PER PERSON PER FORTNIGHT, enforced here for every send — lane and
+  // general alike. Somebody in two lanes gets the first one queued and is passed
+  // over by the second, so the pair of emails that would otherwise land within
+  // an hour of each other cannot happen. Read at the moment the run is queued
+  // rather than when the screen was drawn, because the other lane may have gone
+  // out while this page sat open.
+  const already = emailedThisFortnight();
+  if (already.size) {
+    recipients = recipients.filter(p => !already.has(normEmail(p.email)));
+    if (!recipients.length) return { ok: false, reason: 'all_had_one' };
+  }
 
   // Who the operator unticked in the lane panel, stored against this draft
   // rather than held in the browser. A fortnight is several lane sends on the
@@ -697,6 +709,9 @@ export function schedule(limit = 10) {
     return cursor;
   });
 
+  // Read once for the whole queue rather than per row.
+  const alreadyEmailed = emailedThisFortnight();
+
   const slots = approved.map((d, idx) => {
     const when = new Date(slotDates[idx] + 'T12:00:00Z');
     return {
@@ -709,7 +724,7 @@ export function schedule(limit = 10) {
       // email would be the screen promising a send the server would refuse to
       // make.
       interest:       d.interest || null,
-      projectedCount: countFor(d, included),
+      projectedCount: countFor(d, included, alreadyEmailed),
       // Whether the arrows are pressable. Worked out here rather than in the
       // browser because the browser only ever sees `limit` rows — with more
       // approved drafts than that, the last row on screen is not the last row
@@ -732,6 +747,10 @@ export function schedule(limit = 10) {
       : null,
     nextDueDate: due,
     audienceCount: included.length,
+    // How many of the loop have already had their one email this fortnight, so
+    // the screen can explain a headcount that is smaller than the audience
+    // instead of leaving it looking like people have gone missing.
+    hadOneThisFortnight: alreadyEmailed.size,
     slots,
     config: cadenceConfig(),
   };
@@ -740,8 +759,12 @@ export function schedule(limit = 10) {
 /**
  * How many people one approved draft would actually reach, as the queue stands.
  */
-function countFor(draft, included) {
-  const pool = laneOf(included, draft.interest);
+function countFor(draft, included, already) {
+  let pool = laneOf(included, draft.interest);
+  // The same fortnight rule the send applies. Without it the queue would promise
+  // 303 people for an email that will reach 299, and the number on the Schedule
+  // screen is the number the operator is agreeing to.
+  if (already && already.size) pool = pool.filter(p => !already.has(normEmail(p.email)));
   if (!draft.interest) return pool.length;
   const skipped = draftSkips(draft.id);
   return skipped.size ? pool.filter(p => !skipped.has(normEmail(p.email))).length : pool.length;

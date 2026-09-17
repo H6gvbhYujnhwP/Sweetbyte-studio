@@ -215,7 +215,7 @@ function LaneDraft({ draft, label, ticked, busy, onOpen, onApprove, onBin, onRew
 // ── One person in the lane ───────────────────────────────────────────────────
 function PersonRow({ person, ticked, onToggle, last }) {
   const seen = fmtDate(person.seenAt);
-  const dim = !ticked;
+  const dim = !ticked || person.lockedOut;
 
   return (
     <label
@@ -230,7 +230,9 @@ function PersonRow({ person, ticked, onToggle, last }) {
         type="checkbox"
         checked={ticked}
         onChange={onToggle}
-        style={{ width: 17, height: 17, accentColor: SB.primary, margin: 0 }}
+        disabled={person.lockedOut}
+        title={person.lockedOut ? 'Already had a keep-warm email this fortnight' : undefined}
+        style={{ width: 17, height: 17, accentColor: SB.primary, margin: 0, cursor: person.lockedOut ? 'not-allowed' : 'pointer' }}
       />
       <span style={{ fontSize: 13, color: dim ? TERTIARY : TEXT, fontStyle: person.contactName ? 'normal' : 'italic' }}>
         {person.contactName || 'no name'}
@@ -242,14 +244,19 @@ function PersonRow({ person, ticked, onToggle, last }) {
       <span style={{ fontSize: 13, color: dim ? TERTIARY : MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {person.email}
       </span>
+      {/* Three different things can be true of a row and only one of them can be
+          shown, so they are ordered by what stops a send. Already had an email
+          this fortnight is the one that cannot be overridden, so it wins. */}
       <span style={{
         fontSize: 12,
-        color: seen ? MUTED : SB.dark,
-        background: seen ? '#f2f2ee' : SB.tint,
+        color: person.lockedOut ? '#854F0B' : (seen ? MUTED : SB.dark),
+        background: person.lockedOut ? '#FBF3E4' : (seen ? '#f2f2ee' : SB.tint),
         borderRadius: 999, padding: '3px 9px', justifySelf: 'start',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
       }}>
-        {seen ? `Had this ${seen}` : (person.stageLabel || 'No stage')}
+        {person.lockedOut
+          ? `Had one ${fmtDate(person.hadOneAt) || 'this fortnight'}`
+          : seen ? `Had this ${seen}` : (person.stageLabel || 'No stage')}
       </span>
     </label>
   );
@@ -345,10 +352,15 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   // happens to be showing. "Untick all" while three rows are filtered must mean
   // everybody, or it quietly sends to the ones that scrolled out of view.
   const tickAll = useCallback(() => {
-    const next = new Set();
+    // Everybody who can actually receive it. Somebody who has had their one
+    // email this fortnight stays unticked, because ticking them would show a
+    // tick beside a person the send is going to skip anyway.
+    const next = new Set(
+      (people?.rows || []).filter(p => p.lockedOut).map(p => String(p.email).toLowerCase()),
+    );
     setUnticked(next);
     saveTicks(draftId, next);
-  }, [draftId, saveTicks]);
+  }, [draftId, saveTicks, people]);
 
   const untickAll = useCallback(async () => {
     if (!selected) return;
@@ -524,6 +536,12 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
                 {tickedCount} ticked for the next send. Unticking somebody skips this send only — it does not
                 remove them from the loop or change what they are interested in.
               </div>
+              {people && people.heldBack > 0 && (
+                <div style={{ fontSize: 12, color: '#854F0B', marginTop: 4, lineHeight: 1.6 }}>
+                  {people.heldBack} of them already had a keep-warm email this fortnight, on another card or on
+                  the general one, so this send passes them over. Nobody gets two in a fortnight.
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <SmallButton onClick={tickAll}>Tick all {laneTotal}</SmallButton>

@@ -409,6 +409,54 @@ export function interestCounts() {
   };
 }
 
+// ONE EMAIL PER PERSON PER FORTNIGHT.
+//
+// Somebody ticked for Website and Microsoft 365 is in two lanes, and on a send
+// day both lanes go out. Without this they would get two Sweetbyte emails within
+// an hour of each other, which is the one thing a keep-warm programme cannot do.
+// So the first email they get in a fortnight is the only one they get: every
+// send after it, lane or general, passes them over.
+//
+// Nobody goes quiet as a result. This does not hold anybody back from receiving
+// an email — it only stops a second one. Anybody in no queued lane is still
+// picked up by the general email, which is the last send of the day.
+//
+// THIRTEEN DAYS, NOT A CALENDAR FORTNIGHT. The sends land on the 1st and 3rd
+// Tuesday, which is not always fourteen days apart, and a send sometimes slips a
+// day. Thirteen days back from now covers the current round and stops just short
+// of the previous one, so a slipped send cannot accidentally silence a whole
+// fortnight.
+const FORTNIGHT_DAYS = 13;
+
+/**
+ * The addresses that have already had a keep-warm email this fortnight,
+ * lowercased, mapped to when.
+ *
+ * Counts queued and in-flight rows as well as sent ones. A run queued two
+ * minutes ago has not left yet, but those people are certainly getting it, and
+ * treating them as still available would queue them a second email before the
+ * first one had finished going out.
+ *
+ * Cancelled, failed and suppressed rows do not count. Nobody received those, so
+ * the person is still owed an email this fortnight.
+ */
+export function emailedThisFortnight() {
+  const seen = new Map();
+  const rows = db.prepare(`
+    SELECT lower(kr.email) AS email,
+           MAX(COALESCE(kr.sent_at, r.created_at)) AS at
+      FROM keepwarm_recipients kr
+      JOIN keepwarm_runs r ON r.id = kr.run_id
+     WHERE kr.status IN ('queued', 'sending', 'sent')
+       AND r.status <> 'cancelled'
+       AND COALESCE(kr.sent_at, r.created_at) >= datetime('now', ?)
+     GROUP BY lower(kr.email)
+  `).all(`-${FORTNIGHT_DAYS} days`);
+
+  for (const row of rows) seen.set(row.email, row.at);
+  return seen;
+}
+
 /**
  * Who has already been sent an email on a given lane, and when.
  *
@@ -455,6 +503,7 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
 
   const { included } = buildAudience();
   const seen = interestHistory(k);
+  const already = emailedThisFortnight();
 
   let rows = k === '__none'
     ? included.filter(p => !(p.interests || []).length)
@@ -473,12 +522,26 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
 
   const skips = draftId ? draftSkips(draftId) : null;
 
+  // How many of this lane are actually available for a send right now. The card
+  // count is how many people are in the lane; this is how many would receive it
+  // today, and the two differ whenever somebody has already had their one email
+  // for the fortnight.
+  let heldBack = 0;
+  for (const p of rows) if (already.has(String(p.email || '').toLowerCase())) heldBack += 1;
+
   return {
     total,
+    heldBack,
+    available: Math.max(0, total - heldBack),
     rows: rows.map(p => {
       const email = String(p.email || '').toLowerCase();
       const seenAt = seen.get(email) || null;
+      const hadOne = already.get(email) || null;
       return {
+        // Already had their one email this fortnight, on another lane or on the
+        // general one. Shown rather than hidden, because "why is Dawn not on
+        // this list" is a fair question and an absent row cannot answer it.
+        hadOneAt: hadOne,
         email:       p.email,
         contactName: p.contactName || null,
         companyName: p.companyName || null,
@@ -489,9 +552,11 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
         stage:       p.stage || null,
         stageLabel:  p.stageLabel || null,
         seenAt,
-        // No draft yet means nothing has been unticked yet, so the starting
-        // position is everybody except the people who already had this topic.
-        ticked: skips ? !skips.has(email) : !seenAt,
+        // Somebody who has had their fortnight's email cannot be sent another
+        // one whatever the tick says, so the tick is forced off rather than
+        // shown ticked next to a send that would skip them.
+        ticked: hadOne ? false : (skips ? !skips.has(email) : !seenAt),
+        lockedOut: Boolean(hadOne),
       };
     }),
   };

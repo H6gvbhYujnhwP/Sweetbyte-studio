@@ -730,6 +730,8 @@ function sendReason(d) {
       return 'A send is already running. One at a time — wait for it to finish.';
     case 'empty_audience':
       return 'Nobody qualifies under the current stage rule, so there was nothing to send.';
+    case 'all_had_one':
+      return 'Everybody in that lane has already had a keep-warm email this fortnight, so there was nobody left to send it to. Nobody gets two in a fortnight — this one can go out next time.';
     case 'empty_lane':
       return 'Nobody is in that service lane any more, so there was nothing to send. Interests come from WorkTrackr and may have changed since the email was written.';
     case 'over_cap':
@@ -836,8 +838,32 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, o
       <div style={{ width: 92, fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
         {fmtDate(slot.date)}
       </div>
-      <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {slot.subject}
+      {/* Which email this row actually is. On a send day there may be nine of
+          these queued together — websites, business internet, general IT,
+          domains and so on — and the subject lines alone are not enough to tell
+          at a glance which is which, or that each one is going to its own small
+          list rather than to everybody in the loop. */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {slot.subject}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4, flexWrap: 'wrap' }}>
+          <span style={{
+            fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
+            color: slot.interest ? SB.dark : MUTED,
+            background: slot.interest ? SB.tint : '#f2f2ee',
+            borderRadius: 999, padding: '2px 9px', whiteSpace: 'nowrap',
+          }}>
+            {slot.interest ? laneLabel(slot.interest) : 'General'}
+          </span>
+          <span style={{ fontSize: 12, color: TERTIARY }}>
+            {slot.interest === '__none'
+              ? 'Only the people with nothing ticked'
+              : slot.interest
+                ? `Only the ${slot.projectedCount} ticked for ${laneLabel(slot.interest)}`
+                : 'Everybody in the loop'}
+          </span>
+        </div>
       </div>
       <span style={{
         fontSize: 12, background: GOOD_BG, color: GOOD,
@@ -1489,10 +1515,18 @@ export default function KeepWarm() {
     // A plain confirm rather than a styled modal. This is the one irreversible
     // button on the screen and the number in it is the whole point — a custom
     // dialog would be prettier and easier to click through without reading.
-    const going = handPicked ? selectedCount : slot.projectedCount;
+    // A lane email's headcount comes from the server, which has already narrowed
+    // to that lane and applied the ticks saved against the draft. The Audience
+    // tab's hand-picked selection is about the general email and must not be
+    // read as though it applied here — it would put the wrong number in the one
+    // dialog that cannot be taken back.
+    const going = (!slot.interest && handPicked) ? selectedCount : slot.projectedCount;
     const ok = window.confirm(
       `Send "${slot.subject}" to ${going} ${going === 1 ? 'person' : 'people'}?`
-      + (handPicked ? `\n\nYou have hand-picked these — the other ${Math.max(0, slot.projectedCount - going)} in the loop will not get it.` : '')
+      + (slot.interest
+          ? `\n\nThis is the ${laneLabel(slot.interest)} email. It goes only to the people ticked for ${laneLabel(slot.interest)} — nobody else in the loop will get it.`
+          : '')
+      + ((!slot.interest && handPicked) ? `\n\nYou have hand-picked these — the other ${Math.max(0, slot.projectedCount - going)} in the loop will not get it.` : '')
       + `\n\nYou will have ${(schedule && schedule.config.undoSeconds) || 10} seconds to undo before anything leaves.`
     );
     if (!ok) return;
