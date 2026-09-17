@@ -247,13 +247,18 @@ function LaneDraft({ draft, label, ticked, busy, onOpen, onApprove, onBin, onRew
 //
 // Only shown on lanes that carry examples. Everything else has no box at all
 // rather than an empty one.
-function ExamplesBox({ laneKey, label }) {
+function ExamplesBox({ laneKey, label, reloadKey }) {
   const [rows, setRows]   = useState(null);
   const [next, setNext]   = useState([]);
   const [meta, setMeta]   = useState(null);
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
+  // Something has been typed into the box and not saved yet. Writing an email
+  // moves the rotation on, so the box re-reads itself afterwards to keep "next
+  // up" honest — but not while there is half-typed work in it, because
+  // refreshing that away would lose an address somebody was in the middle of.
+  const [dirty, setDirty] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -263,6 +268,7 @@ function ExamplesBox({ laneKey, label }) {
       setMeta(d);
       setRows(d.sites || []);
       setNext(d.next || []);
+      setDirty(false);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -273,18 +279,32 @@ function ExamplesBox({ laneKey, label }) {
 
   useEffect(() => { setSaved(false); load(); }, [load]);
 
+  // An email has just been written for this lane, so the pair it took is gone
+  // and "next up" is a pair behind. Re-read, unless the box is mid-edit.
+  const firstLoad = useRef(true);
+  useEffect(() => {
+    if (firstLoad.current) { firstLoad.current = false; return; }
+    if (!dirty) load();
+    // `dirty` is deliberately not a dependency: this runs when an email is
+    // written, not every time a character is typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey, load]);
+
   function edit(index, field, value) {
     setSaved(false);
+    setDirty(true);
     setRows(prev => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   }
 
   function addRow() {
     setSaved(false);
+    setDirty(true);
     setRows(prev => [...prev, { name: '', url: '' }]);
   }
 
   function removeRow(index) {
     setSaved(false);
+    setDirty(true);
     setRows(prev => prev.filter((_, i) => i !== index));
   }
 
@@ -305,6 +325,7 @@ function ExamplesBox({ laneKey, label }) {
       setMeta(d);
       setRows(d.sites || []);
       setNext(d.next || []);
+      setDirty(false);
       setSaved(true);
     } catch (err) {
       setError(err.message);
@@ -319,6 +340,15 @@ function ExamplesBox({ laneKey, label }) {
   if (!meta || !meta.supported) return null;
 
   const noun = meta.noun === 'apps' ? 'apps' : 'sites';
+
+  // How short the list can get before an email starts repeating the one before
+  // it. Two go in each email and the list is walked two at a time without ever
+  // resetting, so four or more never repeats. Three cannot avoid it — two
+  // different pairs out of three must share one — and two gives the same pair
+  // every time. Said here rather than silently allowed, because a repeat is
+  // only visible a fortnight later in somebody's inbox.
+  const onList = (rows || []).filter(x => (x.name || '').trim() && (x.url || '').trim()).length;
+  const tooFew = onList > 0 && onList < meta.perEmail * 2;
   const COLUMNS = '1fr 1.3fr 30px';
   const inputStyle = {
     width: '100%', boxSizing: 'border-box', font: 'inherit', fontSize: 13, color: TEXT,
@@ -400,6 +430,14 @@ function ExamplesBox({ laneKey, label }) {
         </SmallButton>
         {saved && <span style={{ fontSize: 12, color: SB.dark }}>Saved.</span>}
       </div>
+
+      {tooFew && (
+        <div style={{ fontSize: 12, color: '#854F0B', background: '#FBF3E4', borderRadius: 6, padding: '8px 10px', lineHeight: 1.6 }}>
+          {onList === 1
+            ? `Only one on the list, so every email shows the same one. Save ${meta.perEmail * 2} or more and no email repeats the one before it.`
+            : `Only ${onList} on the list, so emails will share one with the email before them. Save ${meta.perEmail * 2} or more and that stops.`}
+        </div>
+      )}
 
       {error && (
         <div style={{ fontSize: 13, color: '#A32D2D', lineHeight: 1.6 }}>
@@ -489,6 +527,10 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   const [busy, setBusy]       = useState(false);
   const [writing, setWriting] = useState(null);
   const [note, setNote]       = useState(null);
+  // Counts the emails written in this session. Nothing reads the number; it
+  // exists so the examples box knows an email has just been written and its
+  // "next up" pair has moved on.
+  const [written, setWritten] = useState(0);
 
   // The lane the ticks on screen belong to. Without this, switching from
   // Microsoft 365 to Website for a moment before the new list arrives would
@@ -605,6 +647,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
       if (d.draftId) await saveTicks(d.draftId, unticked);
       ticksFor.current = null;
       if (onDraftsChanged) onDraftsChanged();
+      setWritten(n => n + 1);
       setNote(`Written. Open it to read it before approving.`);
     } catch (err) {
       setError(err.message);
@@ -792,7 +835,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
               so switching another lane on is a change there and nothing here —
               a second list on this side would drift the first time one was
               edited without the other. */}
-          <ExamplesBox laneKey={selected} label={currentLabel} />
+          <ExamplesBox laneKey={selected} label={currentLabel} reloadKey={written} />
 
           {draft
             ? (
