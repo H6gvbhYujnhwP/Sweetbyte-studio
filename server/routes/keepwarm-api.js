@@ -207,9 +207,24 @@ router.get('/audience', (req, res) => {
   try {
     const q = String(req.query.q || '').trim().toLowerCase();
     const show = req.query.show === 'excluded' ? 'excluded' : 'included';
+    // Which service-interest lane the list is narrowed to. '__none' is the
+    // people with nothing ticked, who are a real group and not an absence —
+    // they are the ones who get the general IT support email.
+    const interest = String(req.query.interest || '').trim();
     const { included, excluded } = buildAudience();
 
     let rows = show === 'excluded' ? excluded : included;
+
+    // Interest narrows the list; it never widens it. Applied AFTER buildAudience
+    // has had its say, so somebody excluded by the stage rule cannot reappear
+    // because they happen to be interested in the topic. Stage decides who is
+    // in the loop; interest only decides the topic.
+    if (interest) {
+      rows = interest === '__none'
+        ? rows.filter(r => !(r.interests || []).length)
+        : rows.filter(r => (r.interests || []).includes(interest));
+    }
+
     if (q) {
       rows = rows.filter(r =>
         (r.email || '').toLowerCase().includes(q) ||
@@ -225,6 +240,14 @@ router.get('/audience', (req, res) => {
       truncated: rows.length > 1000,
       includedCount: included.length,
       excludedCount: excluded.length,
+      // What the list is narrowed to, echoed back so the screen can never show
+      // one lane's heading above another lane's rows.
+      interest: interest || null,
+      interestCount: interest
+        ? (show === 'excluded' ? excluded : included).filter(r => interest === '__none'
+            ? !(r.interests || []).length
+            : (r.interests || []).includes(interest)).length
+        : null,
     });
   } catch (err) {
     console.error('[keepwarm] audience failed:', err);
