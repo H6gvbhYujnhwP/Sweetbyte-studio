@@ -74,12 +74,6 @@ function laneLabel(key) {
   return LANE_LABELS[key] || key;
 }
 
-// The lanes that end their email with example websites. Kept in step with
-// LANES_WITH_EXAMPLES in server/services/keepwarm-examples.js, which is the one
-// that decides; this list only decides whether the box is drawn. A lane named
-// here and not there gets a box that saves nothing, so they move together.
-const LANES_WITH_EXAMPLES = ['website'];
-
 const ROW_COLUMNS = '34px minmax(0, 0.9fr) 120px minmax(0, 1.1fr) minmax(0, 1.4fr) 128px';
 
 // The colours the Audience list uses for the same pill, so a greeting reads the
@@ -256,6 +250,7 @@ function LaneDraft({ draft, label, ticked, busy, onOpen, onApprove, onBin, onRew
 function ExamplesBox({ laneKey, label }) {
   const [rows, setRows]   = useState(null);
   const [next, setNext]   = useState([]);
+  const [meta, setMeta]   = useState(null);
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -264,12 +259,14 @@ function ExamplesBox({ laneKey, label }) {
     try {
       const r = await fetch(`/api/keepwarm/interests/${encodeURIComponent(laneKey)}/examples`);
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Could not read the example sites');
+      if (!r.ok) throw new Error(d.error || 'Could not read the examples');
+      setMeta(d);
       setRows(d.sites || []);
       setNext(d.next || []);
       setError(null);
     } catch (err) {
       setError(err.message);
+      setMeta(null);
       setRows([]);
     }
   }, [laneKey]);
@@ -305,6 +302,7 @@ function ExamplesBox({ laneKey, label }) {
       // stored, so the box still shows exactly what was typed and the line that
       // needs fixing is still on screen.
       if (!r.ok) throw new Error(d.error || 'Could not save the list');
+      setMeta(d);
       setRows(d.sites || []);
       setNext(d.next || []);
       setSaved(true);
@@ -316,6 +314,11 @@ function ExamplesBox({ laneKey, label }) {
     }
   }
 
+  // A lane that carries no examples draws no box at all, rather than an empty
+  // one explaining what it does not do.
+  if (!meta || !meta.supported) return null;
+
+  const noun = meta.noun === 'apps' ? 'apps' : 'sites';
   const COLUMNS = '1fr 1.3fr 30px';
   const inputStyle = {
     width: '100%', boxSizing: 'border-box', font: 'inherit', fontSize: 13, color: TEXT,
@@ -325,19 +328,19 @@ function ExamplesBox({ laneKey, label }) {
   return (
     <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>Example sites for this email</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>{meta.heading}</span>
         <span style={{ fontSize: 12, color: MUTED }}>
           {next.length
             ? `Next up: ${next.map(s => s.name).join(', ')}`
-            : 'No sites saved yet'}
+            : `No ${noun} saved yet`}
         </span>
       </div>
 
       <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
         Two of these go at the foot of every {label} email, just above the signature, taken in turn
         so two emails running do not show the same pair. The reader sees the client name and clicks
-        it. Studio writes the sentence that introduces them fresh each time. Leave the list empty and
-        the email simply has no examples line.
+        it. Studio writes the sentence that introduces them fresh each time, in words that suit this
+        lane. Leave the list empty and the email simply has no examples line.
       </div>
 
       {rows === null
@@ -382,14 +385,16 @@ function ExamplesBox({ laneKey, label }) {
 
             {rows.length === 0 && (
               <div style={{ fontSize: 13, color: MUTED, padding: '4px 0' }}>
-                Nothing on the list yet.
+                Nothing on the list yet, so this email will have no examples line.
               </div>
             )}
           </div>
         )}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <SmallButton onClick={addRow} disabled={rows === null}>Add a site</SmallButton>
+        <SmallButton onClick={addRow} disabled={rows === null}>
+          {noun === 'apps' ? 'Add an app' : 'Add a site'}
+        </SmallButton>
         <SmallButton tone="primary" onClick={save} disabled={busy || rows === null}>
           {busy ? 'Saving…' : 'Save list'}
         </SmallButton>
@@ -782,12 +787,12 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
 
           {note && <div style={{ fontSize: 13, color: SB.dark }}>{note}</div>}
 
-          {/* Website only for now. The list is stored per lane on the server, so
-              switching Custom apps on later is a key on a list and not a
-              rebuild — this line is the only thing the screen needs to know. */}
-          {LANES_WITH_EXAMPLES.includes(selected) && (
-            <ExamplesBox laneKey={selected} label={currentLabel} />
-          )}
+          {/* Drawn for every lane, and the box itself draws nothing for a lane
+              that does not carry examples. The server decides which those are,
+              so switching another lane on is a change there and nothing here —
+              a second list on this side would drift the first time one was
+              edited without the other. */}
+          <ExamplesBox laneKey={selected} label={currentLabel} />
 
           {draft
             ? (

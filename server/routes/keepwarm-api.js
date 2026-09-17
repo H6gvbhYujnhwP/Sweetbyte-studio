@@ -76,6 +76,7 @@ import {
   freezeExamplesForDraft,
   examplesHtmlForDraft,
   laneTakesExamples,
+  laneExampleWording,
   EXAMPLES_PER_EMAIL,
 } from '../services/keepwarm-examples.js';
 import { reminderStatus } from '../services/keepwarm-reminders.js';
@@ -298,7 +299,7 @@ router.post('/interests/:key/generate', async (req, res) => {
     if (laneTakesExamples(key)) {
       const sites = takeNextExamples(key, EXAMPLES_PER_EMAIL);
       if (sites.length) {
-        const lead = await writeLeadSentence({ count: sites.length });
+        const lead = await writeLeadSentence({ lane: key, count: sites.length });
         frozen = { lane: key, lead, sites };
       }
     }
@@ -340,11 +341,16 @@ router.get('/interests/:key/examples', (req, res) => {
       return res.json({ interest: key, supported: false, sites: [], next: [], perEmail: EXAMPLES_PER_EMAIL });
     }
 
-    const { sites } = getLaneExamples(key);
+    const wording = laneExampleWording(key);
     res.json({
       interest: key,
       supported: true,
-      sites,
+      // The screen takes its heading and its wording from here rather than
+      // keeping its own copy, so a lane added on the server needs no change on
+      // the screen at all.
+      noun: wording.noun,
+      heading: wording.heading,
+      sites: getLaneExamples(key).sites,
       next: peekNextExamples(key, EXAMPLES_PER_EMAIL),
       perEmail: EXAMPLES_PER_EMAIL,
     });
@@ -376,9 +382,12 @@ router.put('/interests/:key/examples', (req, res) => {
     const result = setLaneExamples(key, sites);
     if (result.error) return res.status(400).json({ error: result.error });
 
+    const wording = laneExampleWording(key);
     res.json({
       interest: key,
       supported: true,
+      noun: wording.noun,
+      heading: wording.heading,
       sites: result.sites,
       next: peekNextExamples(key, EXAMPLES_PER_EMAIL),
       perEmail: EXAMPLES_PER_EMAIL,

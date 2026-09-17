@@ -73,15 +73,47 @@ db.exec(`
 `);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Which lanes offer examples
+// Which lanes offer examples, and what they are examples OF
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Website only, for now. The storage is per lane so the others need no rebuild;
-// turning Custom apps on is this list plus a saved list of sites.
-export const LANES_WITH_EXAMPLES = ['website'];
+// The storage, the rotation and the freezing are the same for every lane. The
+// only thing that differs is the words: a sentence introducing two websites and
+// a sentence introducing two pieces of software are not interchangeable, and a
+// Custom apps email that says "a couple of sites we finished recently" above a
+// list of apps is worse than no line at all.
+//
+// So each lane names its own subject, and the screen takes its wording from
+// here too rather than keeping a second copy that can drift. Adding a lane is
+// an entry in this list and nothing else.
+export const EXAMPLE_LANES = {
+  website: {
+    // What the box on screen calls them.
+    noun:     'sites',
+    heading:  'Example sites for this email',
+    // How the model is told what it is introducing. It never sees an address or
+    // a client name, so this is the whole of what it knows.
+    subject:  'websites Sweetbyte has designed and built for its customers',
+    // The words the sentence must not reach for. Different per lane because
+    // "portfolio" is the giveaway on a website email and "showcase" is the one
+    // on an apps email.
+    avoid:    ['click', 'check out', 'portfolio', 'showcase'],
+  },
+  custom_apps: {
+    noun:     'apps',
+    heading:  'Example apps for this email',
+    subject:  'custom software Sweetbyte has built for its customers, each one built for a single business rather than bought off the shelf',
+    avoid:    ['click', 'check out', 'portfolio', 'showcase', 'solution', 'platform'],
+  },
+};
+
+export const LANES_WITH_EXAMPLES = Object.keys(EXAMPLE_LANES);
 
 export function laneTakesExamples(lane) {
-  return LANES_WITH_EXAMPLES.includes(String(lane || '').trim());
+  return Object.prototype.hasOwnProperty.call(EXAMPLE_LANES, String(lane || '').trim());
+}
+
+export function laneExampleWording(lane) {
+  return EXAMPLE_LANES[String(lane || '').trim()] || null;
 }
 
 // How many go in one email.
@@ -265,18 +297,23 @@ export function takeNextExamples(lane, count = EXAMPLES_PER_EMAIL) {
 // The sentence
 // ─────────────────────────────────────────────────────────────────────────────
 
-const LEAD_SYSTEM = `You write one short sentence for the foot of a British B2B email from Sweetbyte, an IT company in Essex.
+function leadSystemPrompt(lane) {
+  const wording = laneExampleWording(lane);
+  if (!wording) throw new Error(`Studio does not keep example ${lane ? 'entries' : 'sites'} for "${lane}".`);
 
-The sentence introduces examples of websites Sweetbyte has built. The addresses are added afterwards by the software, so you must not write any web address, any client name, any company name and any markup of any kind.
+  return `You write one short sentence for the foot of a British B2B email from Sweetbyte, an IT company in Essex.
+
+The sentence introduces examples of ${wording.subject}. The addresses are added afterwards by the software, so you must not write any web address, any client name, any company name and any markup of any kind.
 
 RULES
 - One sentence. Between 6 and 25 words.
 - It ends with a colon, because the links follow straight after it.
 - UK English. No em dashes. No exclamation marks.
 - Plain, understated, the way one working person writes to another. No marketing language.
-- Do not write "click", "check out", "portfolio" or "showcase".
+- Do not write ${wording.avoid.map(w => `"${w}"`).join(', ')}.
 - Do not name anybody. Do not write any address, link, http, www or @ sign.
 - Reply with the sentence only. No quotation marks, no preamble, no JSON.`;
+}
 
 const LEAD_MAX_WORDS = 25;
 const LEAD_MIN_WORDS = 5;
@@ -325,19 +362,21 @@ export function checkLeadSentence(raw) {
  * Website email said the same thing the moment the model had a bad day, with
  * nothing on screen to say so.
  */
-export async function writeLeadSentence({ count = EXAMPLES_PER_EMAIL, model = null } = {}) {
-  const client = model || createKeepWarmModel({ label: 'examples-lead' });
+export async function writeLeadSentence({ lane, count = EXAMPLES_PER_EMAIL, model = null } = {}) {
+  const system = leadSystemPrompt(lane);
+  const client = model || createKeepWarmModel({ label: `examples-lead:${lane}` });
+  const noun = laneExampleWording(lane).noun === 'apps' ? 'apps' : 'websites';
 
   const user = count === 1
-    ? 'Write the sentence. One example website follows it.'
-    : `Write the sentence. ${count} example websites follow it, so the sentence should read as introducing more than one.`;
+    ? `Write the sentence. One example ${noun === 'apps' ? 'app' : 'website'} follows it.`
+    : `Write the sentence. ${count} example ${noun} follow it, so the sentence should read as introducing more than one.`;
 
   const attempts = 2;
   let lastError = 'the sentence could not be written';
 
   for (let i = 0; i < attempts; i += 1) {
     const raw = await client.complete({
-      system: LEAD_SYSTEM,
+      system,
       user: i === 0 ? user : `${user}\n\nYour last attempt was refused: ${lastError} Write a different sentence that obeys every rule.`,
       temperature: 1,
     });
@@ -346,7 +385,7 @@ export async function writeLeadSentence({ count = EXAMPLES_PER_EMAIL, model = nu
     lastError = checked.error;
   }
 
-  throw new Error(`Studio could not write the line that introduces the example websites: ${lastError}`);
+  throw new Error(`Studio could not write the line that introduces the example ${noun}: ${lastError}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
