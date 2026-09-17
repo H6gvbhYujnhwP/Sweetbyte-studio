@@ -273,6 +273,60 @@ function ManualRow({ row, onRemove, busy }) {
   );
 }
 
+// The four numbers that decide whether to send anything, as tiles.
+//
+// They were a 34px figure with three more numbers buried in the sentence under
+// it. Pulled out so the page answers "how many, and how many are not getting
+// it" before anything has to be read.
+function LoopTiles({ overview }) {
+  const tiles = [
+    { label: 'In the loop',   value: overview.audienceCount,   hint: 'would receive the next email' },
+    { label: 'Excluded',      value: overview.excludedCount,   hint: 'wrong stage, removed, or no stage' },
+    { label: 'Unsubscribed',  value: overview.suppressedCount, hint: 'never emailed again' },
+    { label: 'Bounced',       value: overview.deadInAudience,  hint: 'address does not work' },
+  ];
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
+      {tiles.map(t => (
+        <div key={t.label} style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, padding: '12px 14px' }}>
+          <div style={{ fontSize: 12, color: MUTED }}>{t.label}</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: t.label === 'In the loop' ? SB.strong : TEXT, lineHeight: 1.2, margin: '2px 0 2px' }}>
+            {t.value}
+          </div>
+          <div style={{ fontSize: 11, color: TERTIARY, lineHeight: 1.4 }}>{t.hint}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A drawer. Shut by default, and its heading readable while it is shut, so
+// nothing is hidden — only set aside.
+function Fold({ title, note, children, defaultOpen = false, last = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ borderBottom: last ? 'none' : `1px solid ${BORDER}` }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          width: '100%', textAlign: 'left', background: 'none', border: 'none',
+          padding: '13px 16px', cursor: 'pointer', font: 'inherit',
+        }}
+      >
+        <span style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>
+          <span style={{ color: TERTIARY, marginRight: 8 }}>{open ? '▾' : '▸'}</span>
+          {title}
+        </span>
+        {note && <span style={{ fontSize: 12, color: MUTED }}>{note}</span>}
+      </button>
+      {open && <div style={{ padding: '0 16px 16px' }}>{children}</div>}
+    </div>
+  );
+}
+
 // The catch-up list.
 //
 // Everybody carrying a topic that was set here rather than in WorkTrackr. The
@@ -282,7 +336,7 @@ function ManualRow({ row, onRemove, busy }) {
 // nothing at all.
 //
 // Draws nothing when there is nothing on it, which is the normal state.
-function HandSetTopicsCard({ reloadKey }) {
+function HandSetTopicsCard({ reloadKey, bare = false, onCount }) {
   const [rows, setRows] = useState(null);
   const [busy, setBusy] = useState(null);
 
@@ -295,6 +349,9 @@ function HandSetTopicsCard({ reloadKey }) {
   }, []);
 
   useEffect(() => { load(); }, [load, reloadKey]);
+
+  // The drawer's heading needs the number while the drawer is shut.
+  useEffect(() => { if (onCount) onCount(rows ? rows.length : 0); }, [rows, onCount]);
 
   async function clearOne(email) {
     setBusy(email);
@@ -311,11 +368,15 @@ function HandSetTopicsCard({ reloadKey }) {
 
   if (!rows || !rows.length) return null;
 
+  const Wrap = bare ? React.Fragment : Card;
+
   return (
-    <Card>
-      <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
-        Topics set here, not in WorkTrackr ({rows.length})
-      </h2>
+    <Wrap>
+      {!bare && (
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
+          Topics set here, not in WorkTrackr ({rows.length})
+        </h2>
+      )}
       <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
         These people are in a lane because of a tick made in Studio. Nothing is sent to WorkTrackr,
         so the CRM still says what it always said. Tick them across over there when you get a
@@ -360,7 +421,7 @@ function HandSetTopicsCard({ reloadKey }) {
           </div>
         ))}
       </div>
-    </Card>
+    </Wrap>
   );
 }
 
@@ -374,7 +435,7 @@ function HandSetTopicsCard({ reloadKey }) {
 //
 // Studio already holds every company WorkTrackr has ever sent, so it can find
 // the id itself. That is all this box does.
-function AddOnePersonCard({ onAdded }) {
+function AddOnePersonCard({ onAdded, bare = false }) {
   const [email, setEmail]     = useState('');
   const [contact, setContact] = useState('');
   const [query, setQuery]     = useState('');
@@ -429,11 +490,15 @@ function AddOnePersonCard({ onAdded }) {
     border: `1px solid ${BORDER}`, borderRadius: 8, background: BG, color: TEXT, font: 'inherit',
   };
 
+  const Wrap = bare ? React.Fragment : Card;
+
   return (
-    <Card>
-      <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
-        Add one person
-      </h2>
+    <Wrap>
+      {!bare && (
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
+          Add one person
+        </h2>
+      )}
       <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
         Search for the company instead of typing its WorkTrackr id. Adding somebody here does not
         email them — they join the audience for the next keep-warm send.
@@ -503,18 +568,21 @@ function AddOnePersonCard({ onAdded }) {
       </div>
 
       {error && <p style={{ fontSize: 13, color: '#A32D2D', margin: '10px 0 0', lineHeight: 1.6 }}>{error}</p>}
-    </Card>
+    </Wrap>
   );
 }
 
 // The paste box. Kept as its own component so the Audience card does not grow a
 // third responsibility inline.
-function AddByHandCard({ text, onText, onAdd, busy, result }) {
+function AddByHandCard({ text, onText, onAdd, busy, result, bare = false }) {
+  const Wrap = bare ? React.Fragment : Card;
   return (
-    <Card>
-      <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
-        Add a list of addresses
-      </h2>
+    <Wrap>
+      {!bare && (
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
+          Add a list of addresses
+        </h2>
+      )}
       <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
         For people whose address you have but who have never been sent an introduction email —
         addresses that were only ever written into WorkTrackr notes, for instance. One per line.
@@ -552,7 +620,7 @@ function AddByHandCard({ text, onText, onAdd, busy, result }) {
       </div>
 
       {result && <ManualResult result={result} />}
-    </Card>
+    </Wrap>
   );
 }
 
@@ -1566,6 +1634,9 @@ export default function KeepWarm() {
   const [listOpen, setListOpen]     = useState(false);
   const [listData, setListData]     = useState(null);
   const [listSearch, setListSearch] = useState('');
+  // How many people carry a topic set here rather than in WorkTrackr. Held up
+  // here so the drawer's heading can show it while the drawer is shut.
+  const [handSetCount, setHandSetCount] = useState(0);
 
   // Who the next send goes to.
   //
@@ -2396,6 +2467,7 @@ export default function KeepWarm() {
           <>
             {tab === 'audience' && (<>
             {/* ── Audience ─────────────────────────────────────────────── */}
+            <LoopTiles overview={overview} />
             <Card>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
                 <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0 }}>Who is in the loop</h2>
@@ -2406,16 +2478,9 @@ export default function KeepWarm() {
                 </div>
               </div>
 
-              <div style={{ fontSize: 34, fontWeight: 700, color: SB.strong, margin: '10px 0 2px' }}>
-                {overview.audienceCount}
-              </div>
-              <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>
-                would receive the next email. {overview.excludedCount} excluded
-                {overview.suppressedCount > 0 ? `, of which ${overview.suppressedCount} have unsubscribed` : ''}
-                {overview.deadInAudience > 0 ? ` and ${overview.deadInAudience} bounced` : ''}.
-              </div>
-
-              <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>
+              {/* The four numbers that used to live here are the tiles above.
+                  Said once, at the top, rather than twice. */}
+              <div style={{ fontSize: 13, color: MUTED, margin: '12px 0 8px' }}>
                 Tick the sales stages that stay in the loop. The number on each is how many people
                 you have already emailed who are sitting at that stage right now.
               </div>
@@ -2573,17 +2638,37 @@ export default function KeepWarm() {
             </>)}
 
             {tab === 'audience' && (
-              <>
-                <HandSetTopicsCard reloadKey={manualRows ? manualRows.length : 0} />
-                <AddOnePersonCard onAdded={() => { loadManual(); loadAudience(listMode, listSearch); }} />
-                <AddByHandCard
-                  text={manualText}
-                  onText={setManualText}
-                  onAdd={addByHand}
-                  busy={manualBusy}
-                  result={manualResult}
-                />
-              </>
+              /* Three jobs that are done occasionally, shut until they are
+                 wanted. The headings stay readable while they are shut, so
+                 nothing is hidden — a first look at this page still says what
+                 can be done on it. */
+              <Card style={{ padding: 0, overflow: 'hidden' }}>
+                <Fold title="Add one person" note="search for their company">
+                  <AddOnePersonCard bare onAdded={() => { loadManual(); loadAudience(listMode, listSearch); }} />
+                </Fold>
+                <Fold title="Add a list of addresses" note="paste, one per line" last={handSetCount === 0}>
+                  <AddByHandCard
+                    bare
+                    text={manualText}
+                    onText={setManualText}
+                    onAdd={addByHand}
+                    busy={manualBusy}
+                    result={manualResult}
+                  />
+                </Fold>
+                {handSetCount > 0 && (
+                  <Fold title="Topics set here, not in WorkTrackr" note={`${handSetCount} ${handSetCount === 1 ? 'person' : 'people'}`} last>
+                    <HandSetTopicsCard bare reloadKey={manualRows ? manualRows.length : 0} onCount={setHandSetCount} />
+                  </Fold>
+                )}
+                {/* Mounted while the drawer is shut as well, because it is the
+                    thing that knows whether there is anything to show. */}
+                {handSetCount === 0 && (
+                  <div style={{ display: 'none' }}>
+                    <HandSetTopicsCard bare reloadKey={manualRows ? manualRows.length : 0} onCount={setHandSetCount} />
+                  </div>
+                )}
+              </Card>
             )}
 
             {tab === 'drafts' && (<>
