@@ -118,6 +118,34 @@ try {
   console.error('[keepwarm] deleted_at migration failed:', err.message);
 }
 
+// Which service-interest lane a draft belongs to, and who the operator unticked.
+//
+// `interest` is NULL for every draft written by the 3/6/9 batch generator, which
+// is how the two kinds stay distinguishable forever: NULL means "a general email
+// that goes to whoever is in the loop", a key means "this email is about that one
+// service and may only go to that lane". The send path reads it and narrows the
+// audience itself rather than trusting the screen, so a stale tab cannot put the
+// Microsoft 365 email in front of all 295 people.
+//
+// `skipped` is the addresses unticked in the lane panel, stored as JSON against
+// the draft rather than held in the browser. A fortnight is several lane sends on
+// the same day, each with its own list, and one selection shared across the
+// screen cannot express nine different lists at once. Stored per draft, it can.
+// Empty or NULL means everybody in the lane, which is the ordinary case.
+try {
+  const cols = db.prepare(`PRAGMA table_info(keepwarm_drafts)`).all().map(c => c.name);
+  if (!cols.includes('interest')) {
+    db.exec(`ALTER TABLE keepwarm_drafts ADD COLUMN interest TEXT`);
+    console.log('[keepwarm] added interest column');
+  }
+  if (!cols.includes('skipped')) {
+    db.exec(`ALTER TABLE keepwarm_drafts ADD COLUMN skipped TEXT`);
+    console.log('[keepwarm] added skipped column');
+  }
+} catch (err) {
+  console.error('[keepwarm] lane column migration failed:', err.message);
+}
+
 // Addresses put into the loop by hand.
 //
 // The loop is otherwise derived from service_email_sends: to be in it, Studio
@@ -351,13 +379,160 @@ export function interestCounts() {
     for (const key of list) if (key in counts) counts[key] += 1;
   }
 
+  // The draft standing against each lane, if there is one, so the card can say
+  // "Draft ready" instead of "No draft yet". Newest first and rejected ones
+  // ignored: binning a lane draft is how you ask for another one, so a binned
+  // draft must not leave the card looking occupied.
+  const laneDrafts = {};
+  for (const row of db.prepare(`
+    SELECT id, subject, status, created_at, interest
+      FROM keepwarm_drafts
+     WHERE deleted_at IS NULL
+       AND interest IS NOT NULL
+       AND status IN ('draft', 'approved', 'sent')
+     ORDER BY created_at DESC
+  `).all()) {
+    if (!laneDrafts[row.interest]) {
+      laneDrafts[row.interest] = {
+        id: row.id, subject: row.subject, status: row.status, createdAt: row.created_at,
+      };
+    }
+  }
+
   return {
     counts,
     none,
     audienceTotal: included.length,
     keys: INTEREST_KEYS,
     everReceived: db.prepare(`SELECT COUNT(*) AS n FROM keepwarm_interests`).get()?.n || 0,
+    drafts: laneDrafts,
   };
+}
+
+/**
+ * Who has already been sent an email on a given lane, and when.
+ *
+ * Read from the send history rather than from a new table. Every run names the
+ * draft it came from, and every draft now names its lane, so "has Dawn had the
+ * Microsoft 365 email" is already a fact the database holds — it just had to be
+ * asked for. Only genuinely sent rows count: a queued or failed one is not an
+ * email anybody received.
+ */
+export function interestHistory(key) {
+  const k = String(key || '').trim();
+  const seen = new Map();
+  if (!k) return seen;
+
+  const rows = db.prepare(`
+    SELECT lower(kr.email) AS email, MAX(kr.sent_at) AS last_at
+      FROM keepwarm_recipients kr
+      JOIN keepwarm_runs    r ON r.id = kr.run_id
+      JOIN keepwarm_drafts  d ON d.id = r.draft_id
+     WHERE kr.status = 'sent' AND d.interest = ?
+     GROUP BY lower(kr.email)
+  `).all(k);
+
+  for (const row of rows) seen.set(row.email, row.last_at);
+  return seen;
+}
+
+/**
+ * The people in one lane, in the order the screen lists them.
+ *
+ * Interest never overrules stage. buildAudience() has already decided who is in
+ * the loop at all; this only narrows that list to the people ticked for one
+ * service, and can never add anybody back.
+ *
+ * `seenAt` is when they last had this lane's email, or null. `skipped` is
+ * whether the operator has unticked them for the draft currently standing
+ * against the lane. Somebody who has had it before arrives unticked, which is a
+ * starting position and not a rule — ticking them again sends it again, on
+ * purpose.
+ */
+export function laneAudience(key, { q = '', draftId = null } = {}) {
+  const k = String(key || '').trim();
+  if (!k) return { rows: [], total: 0 };
+
+  const { included } = buildAudience();
+  const seen = interestHistory(k);
+
+  let rows = k === '__none'
+    ? included.filter(p => !(p.interests || []).length)
+    : included.filter(p => (p.interests || []).includes(k));
+
+  const total = rows.length;
+
+  const needle = String(q || '').trim().toLowerCase();
+  if (needle) {
+    rows = rows.filter(r =>
+      (r.email || '').toLowerCase().includes(needle) ||
+      (r.companyName || '').toLowerCase().includes(needle) ||
+      (r.contactName || '').toLowerCase().includes(needle)
+    );
+  }
+
+  const skips = draftId ? draftSkips(draftId) : null;
+
+  return {
+    total,
+    rows: rows.map(p => {
+      const email = String(p.email || '').toLowerCase();
+      const seenAt = seen.get(email) || null;
+      return {
+        email:       p.email,
+        contactName: p.contactName || null,
+        companyName: p.companyName || null,
+        stage:       p.stage || null,
+        stageLabel:  p.stageLabel || null,
+        seenAt,
+        // No draft yet means nothing has been unticked yet, so the starting
+        // position is everybody except the people who already had this topic.
+        ticked: skips ? !skips.has(email) : !seenAt,
+      };
+    }),
+  };
+}
+
+/**
+ * The addresses unticked against one draft, lowercased.
+ *
+ * A stored list that will not parse is treated as empty rather than thrown, and
+ * empty means everybody in the lane. That is the safe direction only because the
+ * lane itself still narrows the send — the worst case is an email reaching
+ * people in its own lane who had been unticked, not an email leaving its lane.
+ */
+export function draftSkips(draftId) {
+  const row = db.prepare(`SELECT skipped FROM keepwarm_drafts WHERE id = ?`).get(String(draftId || ''));
+  if (!row || !row.skipped) return new Set();
+  try {
+    const list = JSON.parse(row.skipped);
+    return new Set((Array.isArray(list) ? list : []).map(x => String(x || '').trim().toLowerCase()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Record who is unticked for one draft.
+ *
+ * Refused on a draft that has already gone: the ticks describe a send that is
+ * still ahead, and a sent run keeps its own frozen list of who it went to.
+ */
+export function setDraftSkips(draftId, emails) {
+  const row = getDraft(draftId);
+  if (!row) return { error: 'no_draft' };
+  if (row.status === 'sent') return { error: 'already_sent' };
+
+  const clean = [...new Set(
+    (Array.isArray(emails) ? emails : [])
+      .map(x => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  )];
+
+  db.prepare(`UPDATE keepwarm_drafts SET skipped = ? WHERE id = ?`)
+    .run(clean.length ? JSON.stringify(clean) : null, draftId);
+
+  return { ok: true, skipped: clean.length };
 }
 
 // The deliberate order of the approved queue.
@@ -909,32 +1084,42 @@ export function finishBatch(id, error = null) {
   `).run(error ? 'failed' : 'done', error ? String(error).slice(0, 500) : null, id);
 }
 
-export function insertDrafts(batchId, drafts) {
+export function insertDrafts(batchId, drafts, { interest = null } = {}) {
   const stmt = db.prepare(`
-    INSERT INTO keepwarm_drafts (id, batch_id, position, angle, subject, html_body, plain_body)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO keepwarm_drafts (id, batch_id, position, angle, subject, html_body, plain_body, interest)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const ids = [];
   const tx = db.transaction((rows) => {
     rows.forEach((d, i) => {
-      stmt.run(uuid(), batchId, i + 1, d.angle || null, d.subject, d.html, d.plain || null);
+      const id = uuid();
+      ids.push(id);
+      stmt.run(id, batchId, i + 1, d.angle || null, d.subject, d.html, d.plain || null, interest);
     });
   });
   tx(drafts);
-  return drafts.length;
+  return { count: drafts.length, ids };
 }
 
-export function listDrafts({ status = null, limit = 100 } = {}) {
+export function listDrafts({ status = null, limit = 100, interest = null } = {}) {
   // deleted_at IS NULL is not optional here — an emptied bin must stay empty on
   // every filter, including "all".
-  const where = status
-    ? 'WHERE deleted_at IS NULL AND status = ?'
-    : 'WHERE deleted_at IS NULL';
-  const params = status ? [status, limit] : [limit];
+  const clauses = ['deleted_at IS NULL'];
+  const params = [];
+  if (status) { clauses.push('status = ?'); params.push(status); }
+  // 'general' asks for the drafts the 3/6/9 generator wrote, which carry no
+  // lane at all. Spelled as a word rather than passing null, because a missing
+  // query parameter and a deliberate request for the general ones are different
+  // questions and must not collapse into the same answer.
+  if (interest === 'general') clauses.push('interest IS NULL');
+  else if (interest) { clauses.push('interest = ?'); params.push(interest); }
+  params.push(limit);
+
   return db.prepare(`
     SELECT id, batch_id, position, angle, subject, html_body, plain_body,
-           status, edited, created_at, approved_at, sent_at
+           status, edited, created_at, approved_at, sent_at, interest, skipped
       FROM keepwarm_drafts
-      ${where}
+     WHERE ${clauses.join(' AND ')}
      ORDER BY created_at DESC, position ASC
      LIMIT ?
   `).all(...params);

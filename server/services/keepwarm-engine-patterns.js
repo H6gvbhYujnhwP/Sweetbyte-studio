@@ -125,3 +125,121 @@ export const CTA_MODES = [
   'reply-for-an-informal-view',
   'reply-with-the-problem-area',
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE NINE SERVICE INTERESTS, AS WRITING BRIEFS
+//
+// CONTENT_PATTERNS above are the areas the generator picks from on its own when
+// it is writing a general batch. These are different: one per service interest
+// ticked on a company in WorkTrackr, used when the operator presses Write on a
+// lane card and the topic has therefore already been decided for them.
+//
+// They are kept separate on purpose rather than the two lists being merged. The
+// generator's areas are shaped for variety across a batch of nine — two of them
+// deliberately cut across several services. The interests are Sweetbyte's actual
+// service list, and a lane email has to be about its own service and nothing
+// else. Merging them would mean either the Website lane occasionally writing
+// about passwords, or the general batch losing its cross-cutting angles.
+//
+// KEYED BY INTEREST KEY, and the keys must match INTEREST_KEYS in
+// keepwarm-store.js exactly. A key with no brief here cannot be written for, and
+// the route says so in plain words rather than falling back to a general email —
+// a "Microsoft 365" email that is actually about IT support is worse than no
+// email, because nobody would spot it before it went out.
+//
+// BACKUPS IS NOT HERE, for the same reason it is not in CONTENT_PATTERNS.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const INTEREST_PATTERNS = {
+  it_support: {
+    id: 'it_support',
+    label: 'day-to-day IT support',
+    readerPain: 'Support that only appears once something has already broken',
+    usefulPoint: 'Support can cover day-to-day help and proactive monitoring together',
+    ctaPrompt: 'Offer an informal second opinion on the current arrangement',
+  },
+  cyber_security: {
+    id: 'cyber_security',
+    label: 'practical cyber security layers',
+    readerPain: 'Relying on one security product while overlooking people and process',
+    usefulPoint: 'Security works best as several understandable layers',
+    ctaPrompt: 'Invite one question about the area that is hardest to assess',
+  },
+  internet: {
+    id: 'internet',
+    label: 'business internet connections',
+    readerPain: 'A connection sold on headline speed that struggles when everyone is working',
+    usefulPoint: 'Upload, contention and what happens when the line fails matter as much as speed',
+    ctaPrompt: 'Ask what happens to the business on the day the line goes down',
+  },
+  wifi: {
+    id: 'wifi',
+    label: 'managed Wi-Fi coverage',
+    readerPain: 'Patchy Wi-Fi in parts of the building that gets blamed on the internet line',
+    usefulPoint: 'Coverage, capacity and interference are separate problems with separate fixes',
+    ctaPrompt: 'Ask whether there is one room where the signal regularly drops',
+  },
+  website: {
+    id: 'website',
+    label: 'website usefulness and maintenance',
+    readerPain: 'A site that is slow, dated, unclear or difficult to use on a phone',
+    usefulPoint: 'A website should quickly explain the business and make contact easy',
+    ctaPrompt: 'Invite a reply with a website address for an informal first look',
+  },
+  domains: {
+    id: 'domains',
+    label: 'domains and hosting',
+    readerPain: 'A domain registered years ago by somebody who has since left',
+    usefulPoint: 'Knowing who controls the domain and when it renews avoids an avoidable outage',
+    ctaPrompt: 'Ask whether anybody in the business could say where the domain is registered',
+  },
+  microsoft_365: {
+    id: 'microsoft_365',
+    label: 'better Microsoft 365 use',
+    readerPain: 'Paying for tools that are underused or using the wrong licence mix',
+    usefulPoint: 'Different people may need different licences and features',
+    ctaPrompt: 'Invite a reply with a Microsoft 365 question',
+  },
+  voip: {
+    id: 'voip',
+    label: 'phones for flexible working',
+    readerPain: 'A phone system that is fixed to one desk or awkward to change',
+    usefulPoint: 'Modern telephony can follow users across desk, mobile and computer',
+    ctaPrompt: 'Invite a reply if the current system no longer fits how the team works',
+  },
+  custom_apps: {
+    id: 'custom_apps',
+    label: 'custom apps and scattered processes',
+    readerPain: 'Work spread across spreadsheets, inboxes and separate systems',
+    usefulPoint: 'A tailored app can put one awkward process in one place',
+    ctaPrompt: 'Ask which repeated process feels more complicated than it should',
+  },
+};
+
+/**
+ * The general IT support email, written for the people with nothing ticked.
+ *
+ * Its own brief rather than a reuse of it_support, because the audience is
+ * different: these are people Sweetbyte knows nothing specific about, so the
+ * email has to be useful without assuming which service they care about.
+ */
+export const GENERAL_PATTERN = {
+  id: 'general',
+  label: 'flexible IT support',
+  readerPain: 'Support that is reactive, unclear or tied to the wrong arrangement',
+  usefulPoint: 'Support can range from day-to-day help to proactive monitoring',
+  ctaPrompt: 'Offer an informal second opinion on the current arrangement',
+};
+
+/**
+ * The writing brief for a lane, or null if there is not one.
+ *
+ * '__none' is the "nothing ticked" lane, which is a real group of people and
+ * not an absence — 291 of the 295 sit in it — so it has a brief like any other.
+ */
+export function patternForInterest(key) {
+  const k = String(key || '').trim();
+  if (!k) return null;
+  if (k === '__none') return GENERAL_PATTERN;
+  return INTEREST_PATTERNS[k] || null;
+}

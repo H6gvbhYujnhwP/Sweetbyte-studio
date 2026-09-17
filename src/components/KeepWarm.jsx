@@ -502,6 +502,30 @@ function SendDayBanner({ r }) {
   );
 }
 
+// The lane labels, for the badge on a draft card and nowhere else.
+//
+// A copy of the labels rather than a fetch, because this is one word on a badge
+// and a second network call to render it would be out of proportion. The keys
+// are permanent — that is the whole point of them — so the copy cannot drift in
+// the way that matters. An unrecognised key falls back to the key itself, which
+// reads oddly but never blanks the badge.
+const LANE_LABELS = {
+  it_support:     'IT support',
+  cyber_security: 'Cyber security',
+  internet:       'Business internet',
+  wifi:           'Managed Wi-Fi',
+  website:        'Website',
+  domains:        'Domains & hosting',
+  microsoft_365:  'Microsoft 365',
+  voip:           'VoIP telephony',
+  custom_apps:    'Custom apps',
+  __none:         'General IT support',
+};
+
+function laneLabel(key) {
+  return LANE_LABELS[key] || key;
+}
+
 function DraftCard({ draft, onOpen, onStatus, busy }) {
   return (
     <div style={{
@@ -509,8 +533,20 @@ function DraftCard({ draft, onOpen, onStatus, busy }) {
       border: `1px solid ${draft.status === 'approved' ? SB.primary : BORDER}`,
       borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <Pill status={draft.status} />
+        {/* Which service lane this one belongs to, if any. Nine lane drafts sit
+            side by side here on a send day and their subject lines are not
+            always enough to tell them apart at a glance. A draft with no badge
+            is a general email, which is every draft the 3/6/9 generator wrote. */}
+        {draft.interest ? (
+          <span style={{
+            fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
+            color: SB.dark, background: SB.tint, borderRadius: 999, padding: '3px 9px',
+          }}>
+            {laneLabel(draft.interest)}
+          </span>
+        ) : null}
         {draft.edited ? <span style={{ fontSize: 12, color: TERTIARY }}>edited</span> : null}
       </div>
       {draft.angle ? (
@@ -694,6 +730,8 @@ function sendReason(d) {
       return 'A send is already running. One at a time — wait for it to finish.';
     case 'empty_audience':
       return 'Nobody qualifies under the current stage rule, so there was nothing to send.';
+    case 'empty_lane':
+      return 'Nobody is in that service lane any more, so there was nothing to send. Interests come from WorkTrackr and may have changed since the email was written.';
     case 'over_cap':
       return `The audience is ${n} people, above the safety limit of ${cap}. That usually means stages have come across wrong from WorkTrackr. Nothing was sent — check the Audience tab.`;
     case 'no_draft':
@@ -2046,7 +2084,12 @@ export default function KeepWarm() {
           Studio lines the next one up and you press send.
         </p>
 
-        <KeepWarmLanes selected={lane} onSelect={setLane} />
+        <KeepWarmLanes
+          selected={lane}
+          onSelect={setLane}
+          onOpenDraft={openDraft}
+          onDraftsChanged={() => { loadDrafts(); loadOverview(); }}
+        />
 
         <TabBar tab={tab} onPick={setTab} />
 

@@ -28,7 +28,7 @@
  *    and the wording after it is whatever Billy typed.
  */
 
-import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES, withSubjectPrefix } from './keepwarm-engine-patterns.js';
+import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES, withSubjectPrefix, patternForInterest } from './keepwarm-engine-patterns.js';
 import {
   buildSystemPrompt,
   buildBatchPrompt,
@@ -82,6 +82,36 @@ export function planSlots({ count, recentAngles = [], seed = new Date().toISOStr
   }));
 }
 
+/**
+ * The single slot for a service-interest lane.
+ *
+ * planSlots() above decides what a general batch is about. This does not decide
+ * anything — the operator pressed Write on the Website card, so the topic is
+ * Website. All it adds is the opening move and the call-to-action shape, varied
+ * by lane and by day so that pressing Write on the same card in a fortnight does
+ * not produce the same email with different words.
+ *
+ * Throws rather than substituting a general brief. Writing a general email under
+ * a Microsoft 365 heading is the one failure nobody would catch before it went
+ * out, so a lane with no brief refuses in plain words instead.
+ */
+export function planInterestSlot({ interestKey, seed = new Date().toISOString().slice(0, 10) }) {
+  const pattern = patternForInterest(interestKey);
+  if (!pattern) {
+    throw new Error(`There is no writing brief for "${interestKey}", so Studio will not write an email for it.`);
+  }
+  const n = hashString(`${interestKey}:${seed}`);
+  return {
+    serviceId:   pattern.id,
+    angle:       pattern.label,
+    readerPain:  pattern.readerPain,
+    usefulPoint: pattern.usefulPoint,
+    ctaPrompt:   pattern.ctaPrompt,
+    openingMove: OPENING_MOVES[n % OPENING_MOVES.length],
+    ctaMode:     CTA_MODES[(n >>> 3) % CTA_MODES.length],
+  };
+}
+
 export class KeepWarmEngine {
   /**
    * @param {{ complete: (request: {system: string, user: string, temperature?: number}) => Promise<string> }} model
@@ -104,11 +134,18 @@ export class KeepWarmEngine {
    * a nonsense count, a response that is not JSON, or a batch in which every
    * single email failed.
    */
-  async generateBatch({ count, knowledgeBase, doNotRepeat = [], recentAngles = [], seed }) {
+  async generateBatch({ count, knowledgeBase, doNotRepeat = [], recentAngles = [], seed, slots: givenSlots = null }) {
     assertKnowledgeBase(knowledgeBase);
     assertCount(count);
 
-    const slots = planSlots({ count, recentAngles, seed });
+    // `slots` supplied means the topic was decided before this call — a lane
+    // draft, where the operator pressed Write on a service card. Everything
+    // after this point is identical to a general batch: same prompt, same
+    // checks, same repair attempts. Only the choice of what to write about
+    // changes hands.
+    const slots = Array.isArray(givenSlots) && givenSlots.length
+      ? givenSlots.slice(0, count)
+      : planSlots({ count, recentAngles, seed });
     const raw = await this.model.complete({
       system: buildSystemPrompt(),
       user: buildBatchPrompt({ count, knowledgeBase, slots, doNotRepeat }),

@@ -16,8 +16,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARAGRAPH_STYLE } from './keepwarm-engine-prompts.js';
 import { parseJsonOnly, validateEmail, validateSubject, unwrapJsonText } from './keepwarm-engine-validator.js';
-import { planSlots, KeepWarmEngine } from './keepwarm-engine-core.js';
-import { CONTENT_PATTERNS, SUBJECT_PREFIX, withSubjectPrefix } from './keepwarm-engine-patterns.js';
+import { planSlots, planInterestSlot, KeepWarmEngine } from './keepwarm-engine-core.js';
+import { CONTENT_PATTERNS, INTEREST_PATTERNS, patternForInterest, SUBJECT_PREFIX, withSubjectPrefix } from './keepwarm-engine-patterns.js';
 import { htmlToText, textToHtml } from './email-body-style.js';
 
 const knowledgeBase = `${'Sweetbyte provides managed IT support, websites, apps, cyber security and Microsoft 365. '.repeat(10)} 25 years 99.9%`;
@@ -396,4 +396,73 @@ test('a markdown fence is stripped before the strict parse', () => {
   assert.equal(unwrapJsonText('Here you go:\n{"a":1}\nHope that helps.'), '{"a":1}');
   assert.equal(unwrapJsonText('{"a":1}'), '{"a":1}');
   assert.deepEqual(parseJsonOnly(unwrapJsonText('```\n{"a":1}\n```')), { a: 1 });
+});
+
+
+// ── Service-interest lanes ──────────────────────────────────────────────────
+//
+// Pressing Write on a lane card means the topic has already been decided, so
+// these check the decision is honoured rather than quietly replaced. The one
+// failure that would never be spotted before an email went out is a general
+// email sitting under a service heading, so the refusal is tested as carefully
+// as the success.
+
+// The nine keys as they stand in keepwarm-store.js. Repeated here rather than
+// imported because that module opens the database on import, which this file
+// deliberately never does.
+const INTEREST_KEY_LIST = [
+  'it_support', 'cyber_security', 'internet', 'wifi', 'website',
+  'domains', 'microsoft_365', 'voip', 'custom_apps',
+];
+
+test('every service interest has a complete writing brief', () => {
+  for (const key of INTEREST_KEY_LIST) {
+    const slot = planInterestSlot({ interestKey: key, seed: '2026-09-17' });
+    assert.equal(slot.serviceId, key, `${key} must write about itself`);
+    for (const field of ['angle', 'readerPain', 'usefulPoint', 'ctaPrompt', 'openingMove', 'ctaMode']) {
+      assert.ok(slot[field], `${key} is missing ${field}`);
+    }
+  }
+  assert.equal(Object.keys(INTEREST_PATTERNS).length, INTEREST_KEY_LIST.length);
+});
+
+test('a lane with no brief refuses rather than writing a general email', () => {
+  assert.equal(patternForInterest('backups'), null);
+  assert.throws(() => planInterestSlot({ interestKey: 'backups' }), /no writing brief/i);
+  assert.throws(() => planInterestSlot({ interestKey: '' }), /no writing brief/i);
+});
+
+test('no lane brief nudges the model towards backups', () => {
+  const text = JSON.stringify(INTEREST_PATTERNS).toLowerCase();
+  assert.equal(text.includes('backup'), false);
+  assert.equal(text.includes('restore'), false);
+});
+
+test('the nothing-ticked lane writes the general IT support email', () => {
+  const slot = planInterestSlot({ interestKey: '__none', seed: '2026-09-17' });
+  assert.equal(slot.serviceId, 'general');
+  assert.match(slot.angle, /support/i);
+});
+
+test('the same lane does not write the same email every fortnight', () => {
+  const moves = new Set(
+    ['2026-09-17', '2026-10-01', '2026-10-15', '2026-10-29']
+      .map(seed => planInterestSlot({ interestKey: 'website', seed }).openingMove),
+  );
+  assert.ok(moves.size > 1, 'the opening move must vary across send days');
+});
+
+test('a lane draft goes through the same checks as any other email', async () => {
+  // One email, topic supplied rather than planned. The model is the same fake
+  // the batch tests use, and the validator is not told to go easy on it.
+  const email = goodEmail('Websites on a phone', 'website usefulness and maintenance', paragraphs);
+  const engine = new KeepWarmEngine(fakeModel([JSON.stringify({ emails: [email] })]));
+  const slot = planInterestSlot({ interestKey: 'website', seed: '2026-09-17' });
+  const result = await engine.generateBatch({
+    count: 1,
+    knowledgeBase,
+    slots: [slot],
+  });
+  assert.equal(result.emails.length, 1);
+  assert.equal(result.rejected.length, 0);
 });

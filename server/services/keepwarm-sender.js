@@ -48,7 +48,7 @@ import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
-import { buildAudience, getDraft, SCHEDULE_ORDER } from './keepwarm-store.js';
+import { buildAudience, getDraft, draftSkips, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
 import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
@@ -265,6 +265,21 @@ export function cadenceConfig() {
  *   not_configured | no_draft | not_approved | already_sent |
  *   run_in_progress | empty_audience | no_match | over_cap
  */
+/**
+ * The slice of the audience one draft is allowed to reach.
+ *
+ * No lane on the draft means the general email, which goes to whoever is in the
+ * loop — that is how every draft written by the 3/6/9 generator behaves, and it
+ * is unchanged. '__none' is the people with nothing ticked, who are a real group
+ * and not an absence.
+ */
+function laneOf(included, interest) {
+  const key = String(interest || '').trim();
+  if (!key) return included;
+  if (key === '__none') return included.filter(p => !(p.interests || []).length);
+  return included.filter(p => (p.interests || []).includes(key));
+}
+
 export function queueRun(draftId, { only = null, exclude = null } = {}) {
   if (!FROM_EMAIL || !FROM_NAME) {
     return { ok: false, reason: 'not_configured' };
@@ -283,18 +298,38 @@ export function queueRun(draftId, { only = null, exclude = null } = {}) {
   const { included } = buildAudience();
   if (!included.length) return { ok: false, reason: 'empty_audience' };
 
+  // THE LANE IS ENFORCED HERE, not on the screen.
+  //
+  // A draft carrying a service interest may only reach the people ticked for
+  // that service. Doing it in the browser would mean a tab left open since this
+  // morning, or a request built by hand, could put the Microsoft 365 email in
+  // front of all 295 people — and it would look completely normal in the send
+  // log afterwards. So the narrowing happens against the live audience at the
+  // moment the run is queued, before the operator's ticks are even read.
+  let recipients = laneOf(included, draft.interest);
+  if (!recipients.length) return { ok: false, reason: 'empty_lane' };
+
+  // Who the operator unticked in the lane panel, stored against this draft
+  // rather than held in the browser. A fortnight is several lane sends on the
+  // same day and each one has its own list; a single shared selection cannot
+  // hold nine lists at once.
+  const skipped = draft.interest ? draftSkips(draft.id) : null;
+  if (skipped && skipped.size) {
+    recipients = recipients.filter(p => !skipped.has(normEmail(p.email)));
+  }
+
   // Two ways to hand-pick, because the screen has two shapes of tick. "Select
   // all then untick three" sends an exclude list; "deselect all then tick
   // myself" sends an only list. Sending the resolved list instead would mean
   // the browser deciding who is in the audience, and a stale tab could then
   // mail somebody who went dead an hour ago.
-  let recipients = included;
+  const pool = recipients;
   if (Array.isArray(only) && only.length) {
     const wanted = new Set(only.map(normEmail).filter(Boolean));
-    recipients = included.filter(p => wanted.has(normEmail(p.email)));
+    recipients = pool.filter(p => wanted.has(normEmail(p.email)));
   } else if (Array.isArray(exclude) && exclude.length) {
     const dropped = new Set(exclude.map(normEmail).filter(Boolean));
-    recipients = included.filter(p => !dropped.has(normEmail(p.email)));
+    recipients = pool.filter(p => !dropped.has(normEmail(p.email)));
   }
 
   if (!recipients.length) {
@@ -632,7 +667,7 @@ export function schedule(limit = 10) {
   // arrows sort by. One definition, so an arrow cannot move a draft past a
   // neighbour the screen was not showing it next to.
   const approved = db.prepare(`
-    SELECT id, subject, created_at, approved_at, schedule_position
+    SELECT id, subject, created_at, approved_at, schedule_position, interest
       FROM keepwarm_drafts
      WHERE status = 'approved'
      ORDER BY ${SCHEDULE_ORDER}
@@ -669,7 +704,12 @@ export function schedule(limit = 10) {
       subject:        d.subject,
       date:           when.toISOString().slice(0, 10),
       dueNow:         idx === 0 && (!due || Date.parse(due + 'T00:00:00Z') <= Date.now()),
-      projectedCount: included.length,
+      // A lane draft is counted against its own lane, minus anybody unticked
+      // for it. Showing the whole loop's headcount next to a Microsoft 365
+      // email would be the screen promising a send the server would refuse to
+      // make.
+      interest:       d.interest || null,
+      projectedCount: countFor(d, included),
       // Whether the arrows are pressable. Worked out here rather than in the
       // browser because the browser only ever sees `limit` rows — with more
       // approved drafts than that, the last row on screen is not the last row
@@ -695,6 +735,16 @@ export function schedule(limit = 10) {
     slots,
     config: cadenceConfig(),
   };
+}
+
+/**
+ * How many people one approved draft would actually reach, as the queue stands.
+ */
+function countFor(draft, included) {
+  const pool = laneOf(included, draft.interest);
+  if (!draft.interest) return pool.length;
+  const skipped = draftSkips(draft.id);
+  return skipped.size ? pool.filter(p => !skipped.has(normEmail(p.email))).length : pool.length;
 }
 
 function runProgress(runId) {

@@ -51,7 +51,7 @@ import { fileURLToPath } from 'url';
 
 import { signatureHtml, disclaimerHtml } from './email-signature.js';
 import { FONT, P_STYLE, htmlToText, textToHtml } from './email-body-style.js';
-import { KeepWarmEngine } from './keepwarm-engine-core.js';
+import { KeepWarmEngine, planInterestSlot } from './keepwarm-engine-core.js';
 import { createKeepWarmModel } from './keepwarm-model.js';
 
 // ── The RAG ──────────────────────────────────────────────────────────────────
@@ -274,6 +274,44 @@ export async function generateFromSubject({ subject, avoid = [] }) {
     angle:   String(result.angle || '').trim().slice(0, 120) || null,
     html:    String(result.html).trim(),
     plain:   typeof result.plain === 'string' ? result.plain.trim() : null,
+  };
+}
+
+/**
+ * Write ONE email for a service-interest lane.
+ *
+ * The topic is not chosen here and it is not chosen by the model. The operator
+ * pressed Write on the Microsoft 365 card, so the email is about Microsoft 365.
+ * Everything else is the ordinary engine: the same prompt, the same paragraph
+ * style, the same bold-label bullets, and the same validator, so a lane email
+ * that does not come back in the house shape is rejected exactly like any other.
+ *
+ * Refuses rather than falling back. A lane with no writing brief throws, because
+ * a general email sitting under a Microsoft 365 heading would go out looking
+ * correct and nobody would catch it.
+ */
+export async function generateForInterest({ interestKey, avoid = [], seed } = {}) {
+  requireRag();
+  const slot = planInterestSlot({ interestKey, seed });
+
+  const batch = await engineFor(`lane:${interestKey}`).generateBatch({
+    count: 1,
+    knowledgeBase: RAG,
+    doNotRepeat: doNotRepeatFrom(avoid),
+    slots: [slot],
+  });
+
+  const email = batch.emails[0];
+  if (!email) {
+    const why = batch.rejected?.[0]?.errors?.[0] || 'nothing usable came back';
+    throw new Error(`Could not write the ${slot.angle} email: ${why}`);
+  }
+
+  return {
+    angle:   String(email.angle || slot.angle).trim().slice(0, 120) || null,
+    subject: String(email.subject).trim().slice(0, 200),
+    html:    String(email.html).trim(),
+    plain:   typeof email.plain === 'string' ? email.plain.trim() : null,
   };
 }
 

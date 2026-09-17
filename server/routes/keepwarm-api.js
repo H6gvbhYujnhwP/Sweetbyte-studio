@@ -51,9 +51,13 @@ import {
   emptyBin,
   previousSubjects,
   interestCounts,
+  laneAudience,
+  setDraftSkips,
+  INTEREST_KEYS,
 } from '../services/keepwarm-store.js';
 import {
   generateEmails,
+  generateForInterest,
   generateFromSubject,
   generateSubject,
   generateBody,
@@ -86,6 +90,18 @@ import {
   activeRun,
   cadenceConfig,
 } from '../services/keepwarm-sender.js';
+
+// A lane key Studio recognises. '__none' is the people with nothing ticked, who
+// are a real group of 291 and not an absence. Anything else is refused rather
+// than guessed at — a mistyped key that fell through to a general email would
+// produce a plausible-looking draft about the wrong thing.
+function isLaneKey(key) {
+  return key === '__none' || INTEREST_KEYS.some(x => x.key === key);
+}
+
+function interestLabelFor(key) {
+  return INTEREST_KEYS.find(x => x.key === key)?.label || key;
+}
 
 const router = Router();
 router.use(requireAuth);
@@ -199,6 +215,101 @@ router.get('/interests', (req, res) => {
     res.json(interestCounts());
   } catch (err) {
     console.error('[keepwarm] interest counts failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /interests/:key/people?q=&draftId=
+ *
+ * The people in one lane, for the list inside the lane panel. Every row says
+ * whether it is ticked for the next send and when that person last had this
+ * lane's email.
+ *
+ * The stage rule has already been applied before this narrows anything, so a
+ * lane can never contain somebody who is dead, opted out or at an excluded
+ * stage. Interest decides the topic; it never decides who is in the loop.
+ */
+router.get('/interests/:key/people', (req, res) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    if (!isLaneKey(key)) return res.status(404).json({ error: 'unknown_interest' });
+
+    const data = laneAudience(key, {
+      q: String(req.query.q || ''),
+      draftId: String(req.query.draftId || '') || null,
+    });
+
+    res.json({
+      interest: key,
+      label: key === '__none' ? 'Nothing ticked' : interestLabelFor(key),
+      ...data,
+      shown: data.rows.length,
+    });
+  } catch (err) {
+    console.error('[keepwarm] lane people failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /interests/:key/generate
+ *
+ * Write one email for this lane. The topic is the lane itself — press Write on
+ * Microsoft 365 and it writes about Microsoft 365 — and the draft is stamped
+ * with the lane, which is what stops it ever being sent to anybody outside it.
+ *
+ * Everything else is the ordinary engine: same prompt, same paragraph style,
+ * same bold-label bullets, same checks. A lane with no writing brief is refused
+ * in plain words rather than quietly producing a general email under a service
+ * heading.
+ */
+router.post('/interests/:key/generate', async (req, res) => {
+  const key = String(req.params.key || '').trim();
+  if (!isLaneKey(key)) return res.status(404).json({ error: 'unknown_interest' });
+
+  const batchId = createBatch(1);
+  try {
+    const draft = await generateForInterest({ interestKey: key, avoid: previousSubjects(30) });
+    const { ids } = insertDrafts(batchId, [draft], { interest: key });
+    finishBatch(batchId);
+
+    console.log(`[keepwarm] wrote a ${key} lane draft`);
+    res.json({
+      interest: key,
+      draft: listDrafts({ limit: 1, interest: key })[0] || null,
+      draftId: ids[0] || null,
+    });
+  } catch (err) {
+    finishBatch(batchId, err.message);
+    console.error('[keepwarm] lane generation failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /drafts/:id/recipients  { skip: [address, ...] }
+ *
+ * Who the operator has unticked for this draft. Stored against the draft rather
+ * than held in the browser, because a fortnight is several lane sends on the
+ * same day and each one needs its own list — one selection shared across the
+ * screen cannot hold nine lists at once.
+ *
+ * Unticking is for this send only. It does not remove anybody from the loop and
+ * it does not change what they are interested in.
+ */
+router.put('/drafts/:id/recipients', (req, res) => {
+  try {
+    const skip = (req.body || {}).skip;
+    if (!Array.isArray(skip)) return res.status(400).json({ error: 'skip must be a list of addresses' });
+
+    const result = setDraftSkips(req.params.id, skip);
+    if (result.error === 'no_draft') return res.status(404).json({ error: 'not_found' });
+    if (result.error) return res.status(409).json({ error: result.error });
+
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] draft recipients failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -477,7 +588,10 @@ router.get('/drafts', (req, res) => {
     const status = ['draft', 'approved', 'rejected', 'sent'].includes(req.query.status)
       ? req.query.status
       : null;
-    res.json({ drafts: listDrafts({ status, limit: 200 }) });
+    // `interest` narrows the list to one service lane; 'general' asks for the
+    // drafts the 3/6/9 generator wrote, which belong to no lane.
+    const interest = String(req.query.interest || '').trim() || null;
+    res.json({ drafts: listDrafts({ status, limit: 200, interest }) });
   } catch (err) {
     console.error('[keepwarm] list drafts failed:', err);
     res.status(500).json({ error: err.message });
