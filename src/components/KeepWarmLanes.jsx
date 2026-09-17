@@ -52,7 +52,31 @@ const COLLAPSED_COUNT = 6;
 // would otherwise push the tabs and everything below them off the screen.
 const LIST_MAX_HEIGHT = 300;
 
-const ROW_COLUMNS = '34px minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, 1.6fr) 130px';
+const ROW_COLUMNS = '34px minmax(0, 0.9fr) 120px minmax(0, 1.1fr) minmax(0, 1.4fr) 128px';
+
+// The colours the Audience list uses for the same pill, so a greeting reads the
+// same wherever it is shown.
+const GOOD    = '#1D7A54';
+const GOOD_BG = '#E4F3EC';
+
+// What the email will open with for one person, shown beside their name so a
+// wrong greeting is caught here rather than in somebody's inbox. A company with
+// nobody named against it opens "Hi there," — which is correct, not a fault, so
+// it is shown in grey rather than flagged as a problem.
+function GreetingPill({ greeting }) {
+  const known = Boolean(greeting);
+  return (
+    <span style={{
+      fontSize: 12, whiteSpace: 'nowrap', padding: '2px 9px', borderRadius: 999,
+      background: known ? GOOD_BG : '#eeeeec',
+      color: known ? GOOD : MUTED,
+      overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+      justifySelf: 'start',
+    }}>
+      Hi {greeting || 'there'},
+    </span>
+  );
+}
 
 function fmtDate(value) {
   if (!value) return null;
@@ -211,6 +235,7 @@ function PersonRow({ person, ticked, onToggle, last }) {
       <span style={{ fontSize: 13, color: dim ? TERTIARY : TEXT, fontStyle: person.contactName ? 'normal' : 'italic' }}>
         {person.contactName || 'no name'}
       </span>
+      <GreetingPill greeting={person.greeting} />
       <span style={{ fontSize: 13, color: dim ? TERTIARY : MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {person.companyName || '—'}
       </span>
@@ -552,6 +577,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
             }}>
               <span />
               <span>Name</span>
+              <span>Opens with</span>
               <span>Company</span>
               <span>Email</span>
               <span>Stage</span>
@@ -582,9 +608,10 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
             {people && people.shown < people.total
               ? `Showing ${people.shown} of ${people.total}. `
               : ''}
-            Anybody who has already had this lane's email starts unticked, with the date shown. Tick them again
-            to send it a second time on purpose. The stage rule still applies — this list can only ever narrow,
-            never add anybody back in.
+            The "Opens with" column is the exact greeting each person will see. A company with nobody named
+            against it opens "Hi there," — that is correct rather than a fault. Anybody who has already had this
+            lane's email starts unticked, with the date shown; tick them again to send it a second time on
+            purpose. The stage rule still applies — this list can only ever narrow, never add anybody back in.
           </div>
         </div>
       )}

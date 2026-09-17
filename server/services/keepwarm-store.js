@@ -482,6 +482,10 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
         email:       p.email,
         contactName: p.contactName || null,
         companyName: p.companyName || null,
+        // What the email will actually open with for this person. Resolved by
+        // project() from the same rule the sender uses, so the line on screen
+        // and the line that goes out cannot disagree. Null means "Hi there,".
+        greeting:    p.greeting || null,
         stage:       p.stage || null,
         stageLabel:  p.stageLabel || null,
         seenAt,
