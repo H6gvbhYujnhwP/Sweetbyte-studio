@@ -52,6 +52,26 @@ const COLLAPSED_COUNT = 6;
 // would otherwise push the tabs and everything below them off the screen.
 const LIST_MAX_HEIGHT = 300;
 
+// The lane labels, for naming the topic somebody has gone to instead. Keys are
+// permanent, which is what makes a local copy safe; an unrecognised one falls
+// back to the key rather than blanking the line.
+const LANE_LABELS = {
+  it_support:     'IT support',
+  cyber_security: 'Cyber security',
+  internet:       'Business internet',
+  wifi:           'Managed Wi-Fi',
+  website:        'Website',
+  domains:        'Domains & hosting',
+  microsoft_365:  'Microsoft 365',
+  voip:           'VoIP telephony',
+  custom_apps:    'Custom apps',
+  __none:         'General IT support',
+};
+
+function laneLabel(key) {
+  return LANE_LABELS[key] || key;
+}
+
 const ROW_COLUMNS = '34px minmax(0, 0.9fr) 120px minmax(0, 1.1fr) minmax(0, 1.4fr) 128px';
 
 // The colours the Audience list uses for the same pill, so a greeting reads the
@@ -236,6 +256,19 @@ function PersonRow({ person, ticked, onToggle, last }) {
       />
       <span style={{ fontSize: 13, color: dim ? TERTIARY : TEXT, fontStyle: person.contactName ? 'normal' : 'italic' }}>
         {person.contactName || 'no name'}
+        {/* Why this row is greyed, in words. A greyed line with no explanation
+            reads as a fault; "they are getting Website this time" reads as the
+            rotation doing its job. */}
+        {!person.sendable && !person.hadOneAt && person.nextTopic && (
+          <span style={{ display: 'block', fontSize: 11, color: TERTIARY, marginTop: 2, lineHeight: 1.4 }}>
+            Getting {laneLabel(person.nextTopic)} this time
+          </span>
+        )}
+        {person.hadOneAt && (
+          <span style={{ display: 'block', fontSize: 11, color: TERTIARY, marginTop: 2, lineHeight: 1.4 }}>
+            Already had one this fortnight
+          </span>
+        )}
       </span>
       <GreetingPill greeting={person.greeting} />
       <span style={{ fontSize: 13, color: dim ? TERTIARY : MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -254,9 +287,13 @@ function PersonRow({ person, ticked, onToggle, last }) {
         borderRadius: 999, padding: '3px 9px', justifySelf: 'start',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
       }}>
-        {person.lockedOut
+        {person.hadOneAt
           ? `Had one ${fmtDate(person.hadOneAt) || 'this fortnight'}`
-          : seen ? `Had this ${seen}` : (person.stageLabel || 'No stage')}
+          : seen
+            ? `Had this ${seen}`
+            : !person.sendable
+              ? `${laneLabel(person.nextTopic)} first`
+              : (person.stageLabel || 'No stage')}
       </span>
     </label>
   );
@@ -356,7 +393,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
     // email this fortnight stays unticked, because ticking them would show a
     // tick beside a person the send is going to skip anyway.
     const next = new Set(
-      (people?.rows || []).filter(p => p.lockedOut).map(p => String(p.email).toLowerCase()),
+      (people?.rows || []).filter(p => !p.sendable || p.hadOneAt).map(p => String(p.email).toLowerCase()),
     );
     setUnticked(next);
     saveTicks(draftId, next);
@@ -463,12 +500,14 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   // actually a bridge that has not been switched on yet.
   const neverReceived = !data.everReceived;
 
-  const laneLabel = selected === '__none'
+  const currentLabel = selected === '__none'
     ? 'Nothing ticked'
     : (keys.find(k => k.key === selected)?.label || selected);
 
   const laneTotal = people?.total ?? 0;
-  const tickedCount = Math.max(0, laneTotal - unticked.size);
+  const laneAvailable = people?.available ?? 0;
+  // Only the people this send can actually reach count towards the tick total.
+  const tickedCount = Math.max(0, laneAvailable - unticked.size);
 
   return (
     <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, padding: '16px 18px', marginBottom: 18 }}>
@@ -530,21 +569,36 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 600, color: TEXT }}>
-                {laneLabel} — {laneTotal} {laneTotal === 1 ? 'person' : 'people'}
+                {currentLabel} — {laneAvailable} {laneAvailable === 1 ? 'person' : 'people'} this time
+                {laneTotal !== laneAvailable && (
+                  <span style={{ fontWeight: 400, fontSize: 13, color: MUTED }}>
+                    {' '}· {laneTotal} ticked for it altogether
+                  </span>
+                )}
               </div>
               <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
                 {tickedCount} ticked for the next send. Unticking somebody skips this send only — it does not
                 remove them from the loop or change what they are interested in.
               </div>
-              {people && people.heldBack > 0 && (
+              {people && (people.heldBack > 0 || people.elsewhere > 0) && (
                 <div style={{ fontSize: 12, color: '#854F0B', marginTop: 4, lineHeight: 1.6 }}>
-                  {people.heldBack} of them already had a keep-warm email this fortnight, on another card or on
-                  the general one, so this send passes them over. Nobody gets two in a fortnight.
+                  {people.elsewhere > 0 && (
+                    <div>
+                      {people.elsewhere} of them are ticked for this as well, but another of their topics comes
+                      first this time, so they are not on this send. They will come round to this one.
+                    </div>
+                  )}
+                  {people.heldBack > 0 && (
+                    <div>
+                      {people.heldBack} already had a keep-warm email this fortnight, so this send passes them
+                      over. Nobody gets two in a fortnight.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <SmallButton onClick={tickAll}>Tick all {laneTotal}</SmallButton>
+              <SmallButton onClick={tickAll}>Tick all {laneAvailable}</SmallButton>
               <SmallButton onClick={untickAll}>Untick all</SmallButton>
             </div>
           </div>
@@ -555,7 +609,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
             ? (
               <LaneDraft
                 draft={draft}
-                label={laneLabel}
+                label={currentLabel}
                 ticked={tickedCount}
                 busy={busy}
                 onOpen={() => onOpenDraft && onOpenDraft(draft.id)}
@@ -566,7 +620,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
             )
             : (
               <div style={{ background: CARD, border: `1px dashed ${BORDER}`, borderRadius: 8, padding: '14px 16px', fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
-                No email written for {laneLabel} yet. Press Write on the card above and Studio writes one about
+                No email written for {currentLabel} yet. Press Write on the card above and Studio writes one about
                 this service, in the usual shape.
               </div>
             )}
@@ -626,10 +680,12 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
             {people && people.shown < people.total
               ? `Showing ${people.shown} of ${people.total}. `
               : ''}
-            The "Opens with" column is the exact greeting each person will see. A company with nobody named
-            against it opens "Hi there," — that is correct rather than a fault. Anybody who has already had this
-            lane's email starts unticked, with the date shown; tick them again to send it a second time on
-            purpose. The stage rule still applies — this list can only ever narrow, never add anybody back in.
+            "Opens with" is the exact greeting each person will see; a company with nobody named against it
+            opens "Hi there," — correct rather than a fault. Everybody ticked for this service is listed, but
+            only the people whose turn it is are ticked: somebody due another of their topics this fortnight
+            says so on their row and comes round to this one next time. The order topics are worked through is
+            fixed and does not depend on which card you send first. The stage rule still applies — this list can
+            only ever narrow, never add anybody back in.
           </div>
         </div>
       )}

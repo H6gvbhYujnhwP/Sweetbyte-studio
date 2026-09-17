@@ -369,14 +369,36 @@ export function companyInterests() {
  */
 export function interestCounts() {
   const { included } = buildAudience();
+  const hadTopics = topicsHadByEmail();
+
+  // Two numbers per lane, and the card shows the second one.
+  //   ticked — everybody ticked for this service in WorkTrackr
+  //   counts — whose turn it is right now, which is the number that would go
+  // They differ because somebody ticked for three services is only due one of
+  // them at a time. The card has to show the number that would actually be
+  // sent; a card promising twelve and sending three is the screen misleading
+  // the person pressing the button.
   const counts = {};
-  for (const { key } of INTEREST_KEYS) counts[key] = 0;
+  const ticked = {};
+  for (const { key } of INTEREST_KEYS) { counts[key] = 0; ticked[key] = 0; }
   let none = 0;
+  let noneFromRotation = 0;
 
   for (const person of included) {
     const list = person.interests || [];
+    for (const key of list) if (key in ticked) ticked[key] += 1;
+
     if (!list.length) { none += 1; continue; }
-    for (const key of list) if (key in counts) counts[key] += 1;
+
+    const next = nextTopicFor(list, hadTopics.get(String(person.email || '').toLowerCase()));
+    if (next === null) {
+      // Every topic they are ticked for has been sent, so they fall back to the
+      // general IT support email rather than going quiet.
+      none += 1;
+      noneFromRotation += 1;
+      continue;
+    }
+    if (next in counts) counts[next] += 1;
   }
 
   // The draft standing against each lane, if there is one, so the card can say
@@ -401,7 +423,9 @@ export function interestCounts() {
 
   return {
     counts,
+    ticked,
     none,
+    noneFromRotation,
     audienceTotal: included.length,
     keys: INTEREST_KEYS,
     everReceived: db.prepare(`SELECT COUNT(*) AS n FROM keepwarm_interests`).get()?.n || 0,
@@ -485,6 +509,60 @@ export function interestHistory(key) {
 }
 
 /**
+ * Which lane topics each person has already been sent, as a Map of address to a
+ * Set of interest keys.
+ *
+ * One query for the whole screen rather than one per lane. Read from the send
+ * history, which is enough on its own: every run names its draft and every lane
+ * draft names its lane, so no extra table is needed to remember who has had
+ * what.
+ */
+export function topicsHadByEmail() {
+  const had = new Map();
+  const rows = db.prepare(`
+    SELECT DISTINCT lower(kr.email) AS email, d.interest AS interest
+      FROM keepwarm_recipients kr
+      JOIN keepwarm_runs   r ON r.id = kr.run_id
+      JOIN keepwarm_drafts d ON d.id = r.draft_id
+     WHERE kr.status = 'sent'
+       AND d.interest IS NOT NULL
+       AND d.interest <> '__none'
+  `).all();
+
+  for (const row of rows) {
+    if (!had.has(row.email)) had.set(row.email, new Set());
+    had.get(row.email).add(row.interest);
+  }
+  return had;
+}
+
+/**
+ * The one topic a person is due next.
+ *
+ * ONE TOPIC PER PERSON PER FORTNIGHT, WORKED THROUGH IN ORDER, NEVER REPEATED.
+ * Ticked for Website and Custom apps, they get Website first because Website
+ * comes first in INTEREST_KEYS — not because of which lane happened to be sent
+ * first, and not because of the order the tags were tapped in WorkTrackr. That
+ * is the whole point: without it, the order the operator presses Send silently
+ * decides everybody's rotation, and pressing the buttons in a different order
+ * next fortnight would quietly change who gets what.
+ *
+ * Null means they have had every topic they are ticked for. Those people drop
+ * back to the general IT support email rather than going quiet — Billy's
+ * decision, so that nobody ticked for two topics ends up hearing less from
+ * Sweetbyte than somebody ticked for none.
+ */
+export function nextTopicFor(interests, had) {
+  // `interests` is already held in INTEREST_KEYS order — normaliseInterests()
+  // sorts it on the way in, precisely so this function has one answer rather
+  // than an answer that depends on tap order.
+  for (const key of (interests || [])) {
+    if (!had || !had.has(key)) return key;
+  }
+  return null;
+}
+
+/**
  * The people in one lane, in the order the screen lists them.
  *
  * Interest never overrules stage. buildAudience() has already decided who is in
@@ -504,6 +582,7 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
   const { included } = buildAudience();
   const seen = interestHistory(k);
   const already = emailedThisFortnight();
+  const hadTopics = topicsHadByEmail();
 
   let rows = k === '__none'
     ? included.filter(p => !(p.interests || []).length)
@@ -527,17 +606,41 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
   // today, and the two differ whenever somebody has already had their one email
   // for the fortnight.
   let heldBack = 0;
-  for (const p of rows) if (already.has(String(p.email || '').toLowerCase())) heldBack += 1;
+  let elsewhere = 0;
+  for (const p of rows) {
+    const e = String(p.email || '').toLowerCase();
+    if (already.has(e)) { heldBack += 1; continue; }
+    const next = nextTopicFor(p.interests, hadTopics.get(e));
+    // Ticked for this lane, but another of their topics comes first. Counted so
+    // the card can say where they went instead of just showing a smaller number.
+    if (k !== '__none' && next && next !== k) elsewhere += 1;
+  }
 
   return {
     total,
     heldBack,
-    available: Math.max(0, total - heldBack),
+    elsewhere,
+    available: Math.max(0, total - heldBack - elsewhere),
     rows: rows.map(p => {
       const email = String(p.email || '').toLowerCase();
       const seenAt = seen.get(email) || null;
       const hadOne = already.get(email) || null;
+      const next = nextTopicFor(p.interests, hadTopics.get(email));
+
+      // Whose turn this lane is. Somebody ticked for three services is only
+      // sendable in one of them at a time — the first of their topics they have
+      // not had yet. The "nothing ticked" lane also picks up anybody who has now
+      // had every topic they are ticked for, so they carry on hearing from
+      // Sweetbyte instead of dropping out of the programme.
+      const mine = k === '__none'
+        ? (!(p.interests || []).length || next === null)
+        : next === k;
+
       return {
+        // The topic they are actually due, so the row can say where they have
+        // gone rather than leaving a greyed line with no explanation.
+        nextTopic: next,
+        sendable: mine,
         // Already had their one email this fortnight, on another lane or on the
         // general one. Shown rather than hidden, because "why is Dawn not on
         // this list" is a fair question and an absent row cannot answer it.
@@ -555,8 +658,11 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
         // Somebody who has had their fortnight's email cannot be sent another
         // one whatever the tick says, so the tick is forced off rather than
         // shown ticked next to a send that would skip them.
-        ticked: hadOne ? false : (skips ? !skips.has(email) : !seenAt),
-        lockedOut: Boolean(hadOne),
+        // Three separate things have to be true before a tick means anything:
+        // it is this person's turn for this topic, they have not had this topic
+        // before, and they have not already had their one email this fortnight.
+        ticked: (hadOne || !mine) ? false : (skips ? !skips.has(email) : !seenAt),
+        lockedOut: Boolean(hadOne) || !mine,
       };
     }),
   };

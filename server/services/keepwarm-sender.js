@@ -48,7 +48,7 @@ import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
-import { buildAudience, getDraft, draftSkips, emailedThisFortnight, SCHEDULE_ORDER } from './keepwarm-store.js';
+import { buildAudience, getDraft, draftSkips, emailedThisFortnight, topicsHadByEmail, nextTopicFor, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
 import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
@@ -276,8 +276,25 @@ export function cadenceConfig() {
 function laneOf(included, interest) {
   const key = String(interest || '').trim();
   if (!key) return included;
-  if (key === '__none') return included.filter(p => !(p.interests || []).length);
-  return included.filter(p => (p.interests || []).includes(key));
+
+  // WHOSE TURN IT IS, not merely who is ticked.
+  //
+  // Somebody ticked for Website and Custom apps is in two lanes but is only due
+  // one topic at a time, and which one is decided by the order in
+  // keepwarm-store.js — never by the order the operator happens to press Send.
+  // Enforcing it here rather than on screen is what makes the send order stop
+  // mattering: queue the nine lanes in any order and every person still gets
+  // their correct next topic.
+  const had = topicsHadByEmail();
+  const nextFor = p => nextTopicFor(p.interests, had.get(normEmail(p.email)));
+
+  if (key === '__none') {
+    // The general email, which is also where somebody lands once they have had
+    // every topic they are ticked for. They carry on hearing from Sweetbyte
+    // rather than dropping out of the programme.
+    return included.filter(p => !(p.interests || []).length || nextFor(p) === null);
+  }
+  return included.filter(p => (p.interests || []).includes(key) && nextFor(p) === key);
 }
 
 export function queueRun(draftId, { only = null, exclude = null } = {}) {
