@@ -411,7 +411,7 @@ test('a markdown fence is stripped before the strict parse', () => {
 // imported because that module opens the database on import, which this file
 // deliberately never does.
 const INTEREST_KEY_LIST = [
-  'it_support', 'cyber_security', 'internet', 'wifi', 'website',
+  'cyber_security', 'internet', 'wifi', 'website',
   'domains', 'microsoft_365', 'voip', 'custom_apps',
 ];
 
@@ -465,4 +465,18 @@ test('a lane draft goes through the same checks as any other email', async () =>
   });
   assert.equal(result.emails.length, 1);
   assert.equal(result.rejected.length, 0);
+});
+
+test('IT support is no longer a lane of its own', () => {
+  // Merged into the general email. A brief here would mean Write producing a
+  // second general email under a service heading, sent to a list that overlaps
+  // the real one.
+  assert.equal(patternForInterest('it_support'), null);
+  assert.throws(() => planInterestSlot({ interestKey: 'it_support' }), /no writing brief/i);
+  assert.equal(Object.prototype.hasOwnProperty.call(INTEREST_PATTERNS, 'it_support'), false);
+});
+
+test('the general email still covers IT support', () => {
+  const slot = planInterestSlot({ interestKey: '__none', seed: '2026-09-17' });
+  assert.match(slot.angle, /IT support/i);
 });

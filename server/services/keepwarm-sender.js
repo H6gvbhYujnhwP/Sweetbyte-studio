@@ -48,7 +48,7 @@ import { v4 as uuid } from 'uuid';
 import db from '../db.js';
 import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
-import { buildAudience, getDraft, draftSkips, emailedThisFortnight, topicsHadByEmail, nextTopicFor, SCHEDULE_ORDER } from './keepwarm-store.js';
+import { buildAudience, getDraft, draftSkips, emailedThisFortnight, topicsHadByEmail, nextTopicFor, INTEREST_KEYS, RETIRED_INTERESTS, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
 import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
@@ -311,6 +311,22 @@ export function queueRun(draftId, { only = null, exclude = null } = {}) {
   if (!draft) return { ok: false, reason: 'no_draft' };
   if (draft.status === 'sent') return { ok: false, reason: 'already_sent' };
   if (draft.status !== 'approved') return { ok: false, reason: 'not_approved' };
+
+  // A DRAFT FOR A LANE THAT NO LONGER EXISTS IS REFUSED OUTRIGHT.
+  //
+  // Not narrowed to nobody, not quietly widened to everybody — refused, with a
+  // reason the screen can print. An approved IT support or backups draft is a
+  // decision that was reversed after it was written, and the one outcome nobody
+  // wants is it going out to whoever still happens to match. Retiring a lane has
+  // to make its queued drafts unsendable, or retiring it did not really happen.
+  if (draft.interest && draft.interest !== '__none'
+      && !INTEREST_KEYS.some(x => x.key === draft.interest)) {
+    return {
+      ok: false,
+      reason: RETIRED_INTERESTS.has(draft.interest) ? 'retired_lane' : 'unknown_lane',
+      lane: draft.interest,
+    };
+  }
 
   const { included } = buildAudience();
   if (!included.length) return { ok: false, reason: 'empty_audience' };

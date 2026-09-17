@@ -509,8 +509,11 @@ function SendDayBanner({ r }) {
 // are permanent — that is the whole point of them — so the copy cannot drift in
 // the way that matters. An unrecognised key falls back to the key itself, which
 // reads oddly but never blanks the badge.
+// it_support is kept here on purpose even though it is no longer a lane. A
+// draft written before the merge still carries the key, and a badge reading
+// "it_support" would be worse than one reading "IT support (retired)".
 const LANE_LABELS = {
-  it_support:     'IT support',
+  it_support:     'IT support (retired)',
   cyber_security: 'Cyber security',
   internet:       'Business internet',
   wifi:           'Managed Wi-Fi',
@@ -730,6 +733,10 @@ function sendReason(d) {
       return 'A send is already running. One at a time — wait for it to finish.';
     case 'empty_audience':
       return 'Nobody qualifies under the current stage rule, so there was nothing to send.';
+    case 'retired_lane':
+      return 'That email is for a service lane Studio no longer has — IT support was merged into the general email, and backups was removed. Nothing was sent, and nothing can be. Bin it and write it on the General IT support card instead.';
+    case 'unknown_lane':
+      return 'That email is tagged to a service Studio does not recognise, so nothing was sent. Bin it and write a new one from a card.';
     case 'all_had_one':
       return 'Everybody in that lane has already had a keep-warm email this fortnight, so there was nobody left to send it to. Nobody gets two in a fortnight — this one can go out next time.';
     case 'empty_lane':

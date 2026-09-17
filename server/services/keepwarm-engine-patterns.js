@@ -150,14 +150,12 @@ export const CTA_MODES = [
 // BACKUPS IS NOT HERE, for the same reason it is not in CONTENT_PATTERNS.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// IT SUPPORT IS NOT HERE, and that is the merge rather than an omission.
+// General IT support is not one service among eight — it is the email that
+// covers all of them, so it lives in GENERAL_PATTERN below and goes out on the
+// General IT support card. A brief here as well would mean writing the same
+// email twice and sending it to overlapping lists.
 export const INTEREST_PATTERNS = {
-  it_support: {
-    id: 'it_support',
-    label: 'day-to-day IT support',
-    readerPain: 'Support that only appears once something has already broken',
-    usefulPoint: 'Support can cover day-to-day help and proactive monitoring together',
-    ctaPrompt: 'Offer an informal second opinion on the current arrangement',
-  },
   cyber_security: {
     id: 'cyber_security',
     label: 'practical cyber security layers',
@@ -225,9 +223,9 @@ export const INTEREST_PATTERNS = {
  */
 export const GENERAL_PATTERN = {
   id: 'general',
-  label: 'flexible IT support',
+  label: 'general IT support across all of Sweetbyte\'s services',
   readerPain: 'Support that is reactive, unclear or tied to the wrong arrangement',
-  usefulPoint: 'Support can range from day-to-day help to proactive monitoring',
+  usefulPoint: 'Support can span day-to-day help, proactive monitoring and the wider services around it',
   ctaPrompt: 'Offer an informal second opinion on the current arrangement',
 };
 

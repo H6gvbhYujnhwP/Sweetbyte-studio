@@ -280,7 +280,6 @@ db.exec(`
  * comes next" rather than a hidden rule about which tag was tapped first.
  */
 export const INTEREST_KEYS = [
-  { key: 'it_support',     label: 'IT support' },
   { key: 'cyber_security', label: 'Cyber security' },
   { key: 'internet',       label: 'Business internet' },
   { key: 'wifi',           label: 'Managed Wi-Fi' },
@@ -292,6 +291,27 @@ export const INTEREST_KEYS = [
 ];
 
 const KNOWN_INTERESTS = new Set(INTEREST_KEYS.map(x => x.key));
+
+// Interest keys Studio used to have a lane for and deliberately does not any
+// more. Listed rather than merely absent, because the two are different: an
+// unknown key might be a new tag Studio has not learned yet, while a retired one
+// is a decision, and a draft still carrying it must be refused rather than sent
+// to whoever happens to match.
+//
+// it_support was merged into the general email on Billy's decision. General IT
+// support is not one service among nine — it is the email that covers all of
+// them, which is exactly what the people with nothing ticked already receive. A
+// separate lane for it meant writing the same email twice and meant somebody
+// ticked for IT support and Website got two emails covering the same ground.
+// Merged rather than renamed, so there is one general email and not two.
+//
+// The chip can stay in WorkTrackr. A company ticked only for IT support now
+// reads as nothing ticked, which puts them on the general email — where they
+// were always going to end up.
+//
+// backups was removed earlier and for a different reason: Sweetbyte does not
+// send keep-warm emails about backups at all. See keepwarm-engine-patterns.js.
+export const RETIRED_INTERESTS = new Set(['it_support', 'backups']);
 
 export function interestLabel(key) {
   return INTEREST_KEYS.find(x => x.key === key)?.label || key;
@@ -331,12 +351,26 @@ export function interestsByEmail() {
   for (const row of db.prepare(`SELECT email, interests FROM keepwarm_interests`).all()) {
     try {
       const parsed = JSON.parse(row.interests || '[]');
-      map.set(String(row.email).toLowerCase(), Array.isArray(parsed) ? parsed : []);
+      map.set(String(row.email).toLowerCase(), keepKnown(parsed));
     } catch {
       map.set(String(row.email).toLowerCase(), []);
     }
   }
   return map;
+}
+
+/**
+ * Drop anything Studio no longer has a lane for, on the way OUT of the database
+ * as well as on the way in.
+ *
+ * Filtering on read as well as on write is what makes retiring a lane take
+ * effect immediately. Rows written before the change still hold the old key, and
+ * without this they would go on counting — a company ticked only for IT support
+ * would sit in a lane with no card, no draft and no way to reach them, instead
+ * of falling through to the general email where they belong.
+ */
+function keepKnown(list) {
+  return (Array.isArray(list) ? list : []).filter(k => KNOWN_INTERESTS.has(String(k || '').trim().toLowerCase()));
 }
 
 /**
@@ -347,7 +381,7 @@ export function companyInterests() {
   for (const row of db.prepare(`SELECT external_company_id, interests FROM keepwarm_company_interests`).all()) {
     try {
       const parsed = JSON.parse(row.interests || '[]');
-      map.set(String(row.external_company_id), Array.isArray(parsed) ? parsed : []);
+      map.set(String(row.external_company_id), keepKnown(parsed));
     } catch {
       map.set(String(row.external_company_id), []);
     }

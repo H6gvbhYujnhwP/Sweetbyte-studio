@@ -56,7 +56,9 @@ const LIST_MAX_HEIGHT = 300;
 // permanent, which is what makes a local copy safe; an unrecognised one falls
 // back to the key rather than blanking the line.
 const LANE_LABELS = {
-  it_support:     'IT support',
+  // Retired as a lane of its own and merged into the general email. Kept here
+  // so a draft written before the merge still names itself in plain words.
+  it_support:     'IT support (retired)',
   cyber_security: 'Cyber security',
   internet:       'Business internet',
   wifi:           'Managed Wi-Fi',
@@ -141,7 +143,7 @@ function LaneCard({ label, count, selected, muted, dashed, draft, busy, onSelect
     ? (draft.status === 'approved' ? 'Approved, queued'
       : draft.status === 'sent'    ? 'Already sent'
       : 'Draft ready')
-    : (muted ? 'General IT support' : 'No draft yet');
+    : (muted ? 'Everyone else' : 'No draft yet');
 
   const statusColour = draft && draft.status !== 'sent' ? SB.dark : TERTIARY;
   const writeLabel = busy ? 'Writing…' : (draft && draft.status !== 'sent' ? 'Open' : 'Write');
@@ -501,7 +503,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   const neverReceived = !data.everReceived;
 
   const currentLabel = selected === '__none'
-    ? 'Nothing ticked'
+    ? 'General IT support'
     : (keys.find(k => k.key === selected)?.label || selected);
 
   const laneTotal = people?.total ?? 0;
@@ -518,7 +520,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
 
       <p style={{ fontSize: 13, color: MUTED, margin: '6px 0 14px', lineHeight: 1.6 }}>
         {neverReceived
-          ? 'WorkTrackr has not sent any service interests yet, so everybody is in the last card. The tags are ticked on a company in WorkTrackr and arrive with the sales stages.'
+          ? 'WorkTrackr has not sent any service interests yet, so everybody is on the General IT support card. The tags are ticked on a company in WorkTrackr and arrive with the sales stages.'
           : 'Press Write on a card and Studio writes an email about that one service. It goes to the ticked people in that card and nobody else.'}
       </p>
 
@@ -536,8 +538,12 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
           />
         ))}
 
+        {/* The general email. Named for what it is rather than for what these
+            people lack: it covers every Sweetbyte service, it is where anybody
+            with nothing ticked belongs, and since IT support was merged in it is
+            also where a company ticked only for IT support lands. */}
         <LaneCard
-          label="Nothing ticked"
+          label="General IT support"
           count={data.none ?? 0}
           selected={selected === '__none'}
           muted
@@ -661,7 +667,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
               )}
               {people && people.rows.length === 0 && (
                 <div style={{ padding: '14px 12px', fontSize: 13, color: MUTED }}>
-                  {search ? 'Nobody in this lane matches that.' : 'Nobody is in this lane yet.'}
+                  {search ? 'Nobody in this lane matches that.' : 'Nobody is due this topic at the moment.'}
                 </div>
               )}
               {people && people.rows.map((p, i) => (
