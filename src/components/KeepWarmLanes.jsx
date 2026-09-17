@@ -43,10 +43,9 @@ const BORDER   = '#e0e0dc';
 const CARD     = '#ffffff';
 const ROW_LINE = '#f0f0ec';
 
-// How many cards are shown before the rest are folded away. Ten cards plus the
-// "nothing ticked" one is a wall; six is roughly one row and a bit on a normal
-// window, and the link says exactly how many are hidden.
-const COLLAPSED_COUNT = 6;
+// Every card is shown. They used to fold away after six, from when they were
+// taller: a "Show all 8" button under two rows of compact cards hid less than
+// it cost to understand.
 
 // The list scrolls rather than growing the page. A lane of a hundred people
 // would otherwise push the tabs and everything below them off the screen.
@@ -129,6 +128,58 @@ function SmallButton({ children, onClick, tone = 'plain', disabled = false, titl
     >
       {children}
     </button>
+  );
+}
+
+// ── One tab ──────────────────────────────────────────────────────────────────
+//
+// The lane panel does three separate jobs — read the email, check who it is
+// going to, keep the examples list — and doing all three in one column is what
+// made the screen feel cramped. One at a time, with the count on the tab so
+// nothing is hidden, only set aside.
+function Tab({ children, count, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        font: 'inherit', fontSize: 13, fontWeight: active ? 600 : 400,
+        color: active ? TEXT : MUTED,
+        background: 'none', border: 'none',
+        borderBottom: `2px solid ${active ? SB.primary : 'transparent'}`,
+        padding: '11px 13px', marginBottom: -1, cursor: 'pointer',
+      }}
+    >
+      {children}
+      {count !== undefined && count !== null && (
+        <span style={{ marginLeft: 7, fontSize: 12, fontWeight: 400, color: TERTIARY }}>{count}</span>
+      )}
+    </button>
+  );
+}
+
+// ── Small print, folded away ─────────────────────────────────────────────────
+//
+// The rules about rotation and stages are worth reading once and in the way
+// while you are working. Kept in full, closed by default.
+function Disclosure({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        style={{
+          font: 'inherit', fontSize: 12, color: SB.strong, background: 'none',
+          border: 'none', padding: 0, cursor: 'pointer',
+        }}
+      >
+        {open ? '▾' : '▸'} {title}
+      </button>
+      {open && (
+        <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.7, marginTop: 8 }}>{children}</div>
+      )}
+    </div>
   );
 }
 
@@ -247,7 +298,7 @@ function LaneDraft({ draft, label, ticked, busy, onOpen, onApprove, onBin, onRew
 //
 // Only shown on lanes that carry examples. Everything else has no box at all
 // rather than an empty one.
-function ExamplesBox({ laneKey, label, reloadKey }) {
+function ExamplesBox({ laneKey, label, reloadKey, onMeta }) {
   const [rows, setRows]   = useState(null);
   const [next, setNext]   = useState([]);
   const [meta, setMeta]   = useState(null);
@@ -260,12 +311,16 @@ function ExamplesBox({ laneKey, label, reloadKey }) {
   // refreshing that away would lose an address somebody was in the middle of.
   const [dirty, setDirty] = useState(false);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const load = useCallback(async () => {
     try {
       const r = await fetch(`/api/keepwarm/interests/${encodeURIComponent(laneKey)}/examples`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not read the examples');
       setMeta(d);
+      // The panel needs this to decide whether to draw the tab at all, and what
+      // number to put on it.
+      if (onMeta) onMeta(d);
       setRows(d.sites || []);
       setNext(d.next || []);
       setDirty(false);
@@ -323,6 +378,7 @@ function ExamplesBox({ laneKey, label, reloadKey }) {
       // needs fixing is still on screen.
       if (!r.ok) throw new Error(d.error || 'Could not save the list');
       setMeta(d);
+      if (onMeta) onMeta(d);
       setRows(d.sites || []);
       setNext(d.next || []);
       setDirty(false);
@@ -356,9 +412,8 @@ function ExamplesBox({ laneKey, label, reloadKey }) {
   };
 
   return (
-    <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>{meta.heading}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, color: MUTED }}>
           {next.length
             ? `Next up: ${next.map(s => s.name).join(', ')}`
@@ -519,7 +574,6 @@ function PersonRow({ person, ticked, onToggle, last }) {
 export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraftsChanged }) {
   const [data, setData]       = useState(null);
   const [error, setError]     = useState(null);
-  const [showAll, setShowAll] = useState(false);
 
   const [people, setPeople]   = useState(null);
   const [search, setSearch]   = useState('');
@@ -531,6 +585,14 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   // exists so the examples box knows an email has just been written and its
   // "next up" pair has moved on.
   const [written, setWritten] = useState(0);
+
+  // Which of the panel's three jobs is on screen. Opens on the email, because
+  // that is the thing you act on; the other two keep their counts on the tab so
+  // nothing is out of sight without saying so.
+  const [tab, setTab] = useState('email');
+  // What the examples box found for this lane. The panel cannot know whether a
+  // lane carries examples without asking, and the box is the thing that asks.
+  const [examplesMeta, setExamplesMeta] = useState(null);
 
   // The lane the ticks on screen belong to. Without this, switching from
   // Microsoft 365 to Website for a moment before the new list arrives would
@@ -553,6 +615,11 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   }, []);
 
   useEffect(() => { loadCounts(); }, [loadCounts]);
+
+  // A new lane is a new set of three jobs. Back to the email, and forget what
+  // the last lane's examples box said — otherwise a lane that carries no
+  // examples would briefly show the previous lane's tab.
+  useEffect(() => { setTab('email'); setExamplesMeta(null); }, [selected]);
 
   // The people in the open lane. Re-read whenever the lane, the search or the
   // draft changes, because the draft is where the ticks are stored.
@@ -712,8 +779,6 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   }
 
   const keys = data.keys || [];
-  const shown = showAll ? keys : keys.slice(0, COLLAPSED_COUNT);
-  const hidden = keys.length - shown.length;
 
   // Nobody has ever been sent an interest, which is a different problem from
   // everybody having nothing ticked. Said in plain words rather than shown as
@@ -730,6 +795,9 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   // Only the people this send can actually reach count towards the tick total.
   const tickedCount = Math.max(0, laneAvailable - unticked.size);
 
+  const examplesTab = examplesMeta && examplesMeta.supported ? examplesMeta : null;
+  const showTab = examplesTab || tab !== 'examples' ? tab : 'email';
+
   return (
     <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, padding: '16px 18px', marginBottom: 18 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
@@ -743,8 +811,10 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
           : 'Press Write on a card and Studio writes an email about that one service. It goes to the ticked people in that card and nobody else.'}
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
-        {shown.map(({ key, label }) => (
+      {/* Every card, all the time. They are compact enough now that folding
+          five of them behind a button hid less than the button cost. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(178px, 1fr))', gap: 10 }}>
+        {keys.map(({ key, label }) => (
           <LaneCard
             key={key}
             label={label}
@@ -774,150 +844,172 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
         />
       </div>
 
-      {hidden > 0 && (
-        <button
-          type="button"
-          onClick={() => setShowAll(true)}
-          style={{ background: 'none', border: 'none', padding: '12px 0 0', cursor: 'pointer', font: 'inherit', fontSize: 13, color: SB.strong }}
-        >
-          Show all {keys.length}
-        </button>
-      )}
-
       {error && (
         <p style={{ fontSize: 13, color: '#A32D2D', margin: '12px 0 0', lineHeight: 1.6 }}>{error}</p>
       )}
 
       {selected && (
-        <div style={{ border: `1px solid ${SB.light}`, background: '#FBFDFE', borderRadius: 10, padding: '14px 16px', marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ border: `1px solid ${SB.light}`, background: CARD, borderRadius: 10, marginTop: 14, overflow: 'hidden' }}>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: TEXT }}>
-                {currentLabel} — {laneAvailable} {laneAvailable === 1 ? 'person' : 'people'} this time
-                {laneTotal !== laneAvailable && (
-                  <span style={{ fontWeight: 400, fontSize: 13, color: MUTED }}>
-                    {' '}· {laneTotal} ticked for it altogether
-                  </span>
+          {/* The header stays put whichever tab is open, so the numbers that
+              decide whether to send are never the thing you have to go and
+              look for. */}
+          <div style={{ background: '#FBFDFE', borderBottom: `1px solid ${SB.light}`, padding: '13px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: TEXT }}>{currentLabel}</div>
+                <div style={{ fontSize: 13, color: MUTED, marginTop: 3 }}>
+                  {laneAvailable} {laneAvailable === 1 ? 'person' : 'people'} this time
+                  {' · '}{tickedCount} ticked
+                  {laneTotal !== laneAvailable && ` · ${laneTotal} ticked for it altogether`}
+                </div>
+              </div>
+              {note && <div style={{ fontSize: 13, color: SB.dark }}>{note}</div>}
+            </div>
+
+            {people && (people.heldBack > 0 || people.elsewhere > 0) && (
+              <div style={{ fontSize: 12, color: '#854F0B', background: '#FBF3E4', borderRadius: 7, padding: '8px 10px', marginTop: 10, lineHeight: 1.6 }}>
+                {people.elsewhere > 0 && (
+                  <div>
+                    {people.elsewhere} of them are ticked for this as well, but another of their topics comes
+                    first this time, so they are not on this send. They will come round to this one.
+                  </div>
+                )}
+                {people.heldBack > 0 && (
+                  <div>
+                    {people.heldBack} already had a keep-warm email this fortnight, so this send passes them
+                    over. Nobody gets two in a fortnight.
+                  </div>
                 )}
               </div>
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
-                {tickedCount} ticked for the next send. Unticking somebody skips this send only — it does not
-                remove them from the loop or change what they are interested in.
-              </div>
-              {people && (people.heldBack > 0 || people.elsewhere > 0) && (
-                <div style={{ fontSize: 12, color: '#854F0B', marginTop: 4, lineHeight: 1.6 }}>
-                  {people.elsewhere > 0 && (
-                    <div>
-                      {people.elsewhere} of them are ticked for this as well, but another of their topics comes
-                      first this time, so they are not on this send. They will come round to this one.
-                    </div>
-                  )}
-                  {people.heldBack > 0 && (
-                    <div>
-                      {people.heldBack} already had a keep-warm email this fortnight, so this send passes them
-                      over. Nobody gets two in a fortnight.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <SmallButton onClick={tickAll}>Tick all {laneAvailable}</SmallButton>
-              <SmallButton onClick={untickAll}>Untick all</SmallButton>
-            </div>
-          </div>
-
-          {note && <div style={{ fontSize: 13, color: SB.dark }}>{note}</div>}
-
-          {/* Drawn for every lane, and the box itself draws nothing for a lane
-              that does not carry examples. The server decides which those are,
-              so switching another lane on is a change there and nothing here —
-              a second list on this side would drift the first time one was
-              edited without the other. */}
-          <ExamplesBox laneKey={selected} label={currentLabel} reloadKey={written} />
-
-          {draft
-            ? (
-              <LaneDraft
-                draft={draft}
-                label={currentLabel}
-                ticked={tickedCount}
-                busy={busy}
-                onOpen={() => onOpenDraft && onOpenDraft(draft.id)}
-                onApprove={() => setStatus(draft.id, 'approved')}
-                onBin={() => setStatus(draft.id, 'rejected')}
-                onRewrite={() => write(selected)}
-              />
-            )
-            : (
-              <div style={{ background: CARD, border: `1px dashed ${BORDER}`, borderRadius: 8, padding: '14px 16px', fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
-                No email written for {currentLabel} yet. Press Write on the card above and Studio writes one about
-                this service, in the usual shape.
-              </div>
             )}
-
-          <label style={{ display: 'block' }}>
-            <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
-              Search the people in this lane
-            </span>
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search name, company or address"
-              style={{
-                width: '100%', boxSizing: 'border-box', font: 'inherit', fontSize: 13, color: TEXT,
-                background: CARD, border: `1px solid ${BORDER}`, borderRadius: 7, padding: '9px 11px',
-              }}
-            />
-          </label>
-
-          <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden' }}>
-            <div style={{
-              display: 'grid', gridTemplateColumns: ROW_COLUMNS, gap: 10, alignItems: 'center',
-              padding: '9px 12px', background: '#fafaf8', borderBottom: `1px solid ${BORDER}`,
-              fontSize: 12, color: MUTED,
-            }}>
-              <span />
-              <span>Name</span>
-              <span>Opens with</span>
-              <span>Company</span>
-              <span>Email</span>
-              <span>Stage</span>
-            </div>
-
-            <div style={{ maxHeight: LIST_MAX_HEIGHT, overflowY: 'auto' }}>
-              {!people && (
-                <div style={{ padding: '14px 12px', fontSize: 13, color: MUTED }}>Loading…</div>
-              )}
-              {people && people.rows.length === 0 && (
-                <div style={{ padding: '14px 12px', fontSize: 13, color: MUTED }}>
-                  {search ? 'Nobody in this lane matches that.' : 'Nobody is due this topic at the moment.'}
-                </div>
-              )}
-              {people && people.rows.map((p, i) => (
-                <PersonRow
-                  key={p.email}
-                  person={p}
-                  ticked={!unticked.has(String(p.email).toLowerCase())}
-                  onToggle={() => toggleOne(p.email)}
-                  last={i === people.rows.length - 1}
-                />
-              ))}
-            </div>
           </div>
 
-          <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.6 }}>
-            {people && people.shown < people.total
-              ? `Showing ${people.shown} of ${people.total}. `
-              : ''}
-            "Opens with" is the exact greeting each person will see; a company with nobody named against it
-            opens "Hi there," — correct rather than a fault. Everybody ticked for this service is listed, but
-            only the people whose turn it is are ticked: somebody due another of their topics this fortnight
-            says so on their row and comes round to this one next time. The order topics are worked through is
-            fixed and does not depend on which card you send first. The stage rule still applies — this list can
-            only ever narrow, never add anybody back in.
+          <div style={{ display: 'flex', gap: 2, padding: '0 10px', borderBottom: `1px solid ${BORDER}` }}>
+            <Tab active={showTab === 'email'} onClick={() => setTab('email')}>The email</Tab>
+            <Tab active={showTab === 'people'} onClick={() => setTab('people')} count={laneAvailable}>
+              Who it goes to
+            </Tab>
+            {examplesTab && (
+              <Tab active={showTab === 'examples'} onClick={() => setTab('examples')} count={examplesTab.sites.length}>
+                {examplesTab.heading.replace(' for this email', '')}
+              </Tab>
+            )}
+          </div>
+
+          <div style={{ padding: '16px' }}>
+
+            <div style={{ display: showTab === 'email' ? 'block' : 'none' }}>
+              {draft
+                ? (
+                  <LaneDraft
+                    draft={draft}
+                    label={currentLabel}
+                    ticked={tickedCount}
+                    busy={busy}
+                    onOpen={() => onOpenDraft && onOpenDraft(draft.id)}
+                    onApprove={() => setStatus(draft.id, 'approved')}
+                    onBin={() => setStatus(draft.id, 'rejected')}
+                    onRewrite={() => write(selected)}
+                  />
+                )
+                : (
+                  <div style={{ background: CARD, border: `1px dashed ${BORDER}`, borderRadius: 8, padding: '14px 16px', fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
+                    No email written for {currentLabel} yet. Press Write on the card above and Studio writes one about
+                    this service, in the usual shape.
+                  </div>
+                )}
+            </div>
+
+            <div style={{ display: showTab === 'people' ? 'flex' : 'none', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.6, flex: '1 1 260px' }}>
+                  Unticking somebody skips this send only — it does not remove them from the loop or change what
+                  they are interested in.
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <SmallButton onClick={tickAll}>Tick all {laneAvailable}</SmallButton>
+                  <SmallButton onClick={untickAll}>Untick all</SmallButton>
+                </div>
+              </div>
+
+              <label style={{ display: 'block' }}>
+                <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+                  Search the people in this lane
+                </span>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search name, company or address"
+                  style={{
+                    width: '100%', boxSizing: 'border-box', font: 'inherit', fontSize: 13, color: TEXT,
+                    background: CARD, border: `1px solid ${BORDER}`, borderRadius: 7, padding: '9px 11px',
+                  }}
+                />
+              </label>
+
+              <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: ROW_COLUMNS, gap: 10, alignItems: 'center',
+                  padding: '9px 12px', background: '#fafaf8', borderBottom: `1px solid ${BORDER}`,
+                  fontSize: 12, color: MUTED,
+                }}>
+                  <span />
+                  <span>Name</span>
+                  <span>Opens with</span>
+                  <span>Company</span>
+                  <span>Email</span>
+                  <span>Stage</span>
+                </div>
+
+                <div style={{ maxHeight: LIST_MAX_HEIGHT, overflowY: 'auto' }}>
+                  {!people && (
+                    <div style={{ padding: '14px 12px', fontSize: 13, color: MUTED }}>Loading…</div>
+                  )}
+                  {people && people.rows.length === 0 && (
+                    <div style={{ padding: '14px 12px', fontSize: 13, color: MUTED }}>
+                      {search ? 'Nobody in this lane matches that.' : 'Nobody is due this topic at the moment.'}
+                    </div>
+                  )}
+                  {people && people.rows.map((p, i) => (
+                    <PersonRow
+                      key={p.email}
+                      person={p}
+                      ticked={!unticked.has(String(p.email).toLowerCase())}
+                      onToggle={() => toggleOne(p.email)}
+                      last={i === people.rows.length - 1}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <Disclosure title="How this lane decides who gets what">
+                {people && people.shown < people.total
+                  ? `Showing ${people.shown} of ${people.total}. `
+                  : ''}
+                "Opens with" is the exact greeting each person will see; a company with nobody named against it
+                opens "Hi there," — correct rather than a fault. Everybody ticked for this service is listed, but
+                only the people whose turn it is are ticked: somebody due another of their topics this fortnight
+                says so on their row and comes round to this one next time. The order topics are worked through is
+                fixed and does not depend on which card you send first. The stage rule still applies — this list can
+                only ever narrow, never add anybody back in.
+              </Disclosure>
+            </div>
+
+            {/* Always mounted, hidden when another tab is open. It is the thing
+                that knows whether this lane carries examples at all, so the tab
+                above cannot be drawn until it has asked — and keeping it mounted
+                means a half-typed address survives a look at the people list. */}
+            <div style={{ display: showTab === 'examples' ? 'block' : 'none' }}>
+              <ExamplesBox
+                laneKey={selected}
+                label={currentLabel}
+                reloadKey={written}
+                onMeta={setExamplesMeta}
+              />
+            </div>
+
           </div>
         </div>
       )}
