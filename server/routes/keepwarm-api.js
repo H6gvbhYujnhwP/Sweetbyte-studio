@@ -67,6 +67,17 @@ import {
   ragLoaded,
   ALLOWED_COUNTS,
 } from '../services/keepwarm-generator.js';
+import {
+  getLaneExamples,
+  setLaneExamples,
+  peekNextExamples,
+  takeNextExamples,
+  writeLeadSentence,
+  freezeExamplesForDraft,
+  examplesHtmlForDraft,
+  laneTakesExamples,
+  EXAMPLES_PER_EMAIL,
+} from '../services/keepwarm-examples.js';
 import { reminderStatus } from '../services/keepwarm-reminders.js';
 import {
   listIdeas,
@@ -271,7 +282,29 @@ router.post('/interests/:key/generate', async (req, res) => {
   const batchId = createBatch(1);
   try {
     const draft = await generateForInterest({ interestKey: key, avoid: previousSubjects(30) });
+
+    // The example websites, before the draft exists rather than after.
+    //
+    // Both halves have to be in hand before anything is saved: if the sentence
+    // that introduces them cannot be written, there is no half-finished draft
+    // sitting in the queue with a dangling pair of links and nothing to
+    // introduce them. The error says what went wrong and pressing Write again
+    // is the whole of the recovery.
+    //
+    // A lane with no saved sites simply gets no line. That is the state every
+    // lane is in until somebody fills the list in, and refusing to write the
+    // email over it would lock the lane shut.
+    let frozen = null;
+    if (laneTakesExamples(key)) {
+      const sites = takeNextExamples(key, EXAMPLES_PER_EMAIL);
+      if (sites.length) {
+        const lead = await writeLeadSentence({ count: sites.length });
+        frozen = { lane: key, lead, sites };
+      }
+    }
+
     const { ids } = insertDrafts(batchId, [draft], { interest: key });
+    if (frozen && ids[0]) freezeExamplesForDraft(ids[0], frozen);
     finishBatch(batchId);
 
     console.log(`[keepwarm] wrote a ${key} lane draft`);
@@ -283,6 +316,75 @@ router.post('/interests/:key/generate', async (req, res) => {
   } catch (err) {
     finishBatch(batchId, err.message);
     console.error('[keepwarm] lane generation failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /interests/:key/examples
+ *
+ * The example websites saved against this lane, and the ones the next email
+ * would use. Both, because "next up" is the only thing that makes pressing
+ * Write predictable — the list is in the order it was typed, and the rotation
+ * is somewhere in the middle of it.
+ *
+ * A lane that does not carry examples answers with an empty list and says so,
+ * rather than 404ing. The screen asks about whichever card is open.
+ */
+router.get('/interests/:key/examples', (req, res) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    if (!isLaneKey(key)) return res.status(404).json({ error: 'unknown_interest' });
+
+    if (!laneTakesExamples(key)) {
+      return res.json({ interest: key, supported: false, sites: [], next: [], perEmail: EXAMPLES_PER_EMAIL });
+    }
+
+    const { sites } = getLaneExamples(key);
+    res.json({
+      interest: key,
+      supported: true,
+      sites,
+      next: peekNextExamples(key, EXAMPLES_PER_EMAIL),
+      perEmail: EXAMPLES_PER_EMAIL,
+    });
+  } catch (err) {
+    console.error('[keepwarm] lane examples failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /interests/:key/examples  { sites: [{ name, url }, ...] }
+ *
+ * Save the list. Every address is checked here and a bad one refuses the whole
+ * save with a plain reason — a dead link in an email over Billy's name is worse
+ * than being made to retype an address, and half a saved list is worse than
+ * both.
+ *
+ * Saving does not touch any draft already written. Those carry their own frozen
+ * copy, so what was approved is what goes out.
+ */
+router.put('/interests/:key/examples', (req, res) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    if (!isLaneKey(key)) return res.status(404).json({ error: 'unknown_interest' });
+
+    const sites = (req.body || {}).sites;
+    if (!Array.isArray(sites)) return res.status(400).json({ error: 'The list of sites is missing.' });
+
+    const result = setLaneExamples(key, sites);
+    if (result.error) return res.status(400).json({ error: result.error });
+
+    res.json({
+      interest: key,
+      supported: true,
+      sites: result.sites,
+      next: peekNextExamples(key, EXAMPLES_PER_EMAIL),
+      perEmail: EXAMPLES_PER_EMAIL,
+    });
+  } catch (err) {
+    console.error('[keepwarm] save lane examples failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -616,7 +718,14 @@ router.get('/drafts/:id', (req, res) => {
       // The editable form of the body. The operator works in plain paragraphs;
       // the inline styling is put back on save, so no tag ever reaches the screen.
       bodyText: htmlToText(row.html_body, { keepBold: true }),
-      preview: renderEmailHtml({ bodyHtml: row.html_body, firstName: null }),
+      preview: renderEmailHtml({
+        bodyHtml: row.html_body,
+        firstName: null,
+        // The example websites frozen onto this draft. Shown in the preview
+        // because approving an email having never seen its last line is
+        // exactly what the preview exists to prevent.
+        examplesHtml: examplesHtmlForDraft(row.id),
+      }),
     });
   } catch (err) {
     console.error('[keepwarm] get draft failed:', err);
@@ -655,7 +764,11 @@ router.put('/drafts/:id', (req, res) => {
     res.json({
       draft: result,
       bodyText: htmlToText(result.html_body, { keepBold: true }),
-      preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
+      preview: renderEmailHtml({
+        bodyHtml: result.html_body,
+        firstName: null,
+        examplesHtml: examplesHtmlForDraft(result.id),
+      }),
     });
   } catch (err) {
     console.error('[keepwarm] update draft failed:', err);
@@ -720,7 +833,11 @@ router.post('/drafts/:id/regenerate', async (req, res) => {
     res.json({
       draft: result,
       bodyText: htmlToText(result.html_body, { keepBold: true }),
-      preview: renderEmailHtml({ bodyHtml: result.html_body, firstName: null }),
+      preview: renderEmailHtml({
+        bodyHtml: result.html_body,
+        firstName: null,
+        examplesHtml: examplesHtmlForDraft(result.id),
+      }),
     });
   } catch (err) {
     console.error('[keepwarm] regenerate failed:', err);

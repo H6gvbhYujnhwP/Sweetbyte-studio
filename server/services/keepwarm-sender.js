@@ -50,6 +50,7 @@ import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
 import { buildAudience, getDraft, draftSkips, emailedThisFortnight, topicsHadByEmail, nextTopicFor, INTEREST_KEYS, RETIRED_INTERESTS, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
+import { examplesHtmlForDraft } from './keepwarm-examples.js';
 import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
 
@@ -478,6 +479,9 @@ export async function sendTest({ draftId, toEmail }) {
     bodyHtml:  draft.html_body,
     unsubUrl:  unsubUrlFor(email),
     firstName: null,
+    // The example websites frozen onto this draft, so a test send is the real
+    // email and not a version of it with the last line missing.
+    examplesHtml: examplesHtmlForDraft(draft.id),
     // The signature's pictures travel inside the message. Outlook blocks
     // remote images on mail from outside the recipient's organisation, so a
     // hosted logo arrives as a placeholder nobody clicks.
@@ -496,6 +500,11 @@ export async function sendTest({ draftId, toEmail }) {
       htmlBody:  html,
       plainBody: htmlToText(html),
       inlineImages: signatureImages(),
+      // The Unsubscribe button Gmail and Outlook draw beside the sender's name.
+      // Same signed link as the one in the email, so both routes end at the
+      // same opt-out. A test send carries it too, because a test that behaves
+      // differently from a real send proves nothing.
+      listUnsubscribeUrl: unsubUrlFor(email),
     });
     console.log(`[keepwarm] test of draft ${draftId} sent to ${email}`);
     return { ok: true, messageId: messageId || null };
@@ -576,6 +585,11 @@ export async function processDue() {
 async function sendRun(run) {
   const out = { sent: 0, failed: 0, suppressed: 0 };
 
+  // The example websites frozen onto the draft this run came from. Read once
+  // for the whole run rather than per recipient: everybody on one send sees the
+  // same pair, which is the whole of the rotation decision.
+  const frozenExamples = examplesHtmlForDraft(run.draft_id);
+
   const pending = db.prepare(`
     SELECT * FROM keepwarm_recipients
      WHERE run_id = ? AND status = 'queued'
@@ -623,6 +637,10 @@ async function sendRun(run) {
         const html = renderEmailHtml({
           bodyHtml:  run.html_body,
           unsubUrl:  unsubUrlFor(r.email),
+          // Read from the draft this run was frozen from, so what goes out is
+          // the pair that was on screen when it was approved. Editing the list
+          // of sites afterwards changes the next email, never this one.
+          examplesHtml: frozenExamples,
           // Pictures embedded, exactly as in the test send above.
           inline:    true,
           // The greeting stored when the run was frozen. Older rows have none,
@@ -643,6 +661,12 @@ async function sendRun(run) {
           htmlBody:  html,
           plainBody: htmlToText(html),
           inlineImages: signatureImages(),
+          // The Unsubscribe button Gmail and Outlook draw beside the sender's
+          // name. It is the same signed link that is in the email, so both
+          // routes end at the same opt-out and neither can miss the other.
+          // Bulk senders are expected to carry it; without it a reader who
+          // wants out reaches for "junk" instead, which costs the domain.
+          listUnsubscribeUrl: unsubUrlFor(r.email),
         });
 
         markSent.run(messageId || null, r.id);

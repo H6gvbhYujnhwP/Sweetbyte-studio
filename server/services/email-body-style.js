@@ -64,6 +64,39 @@ export const P_STYLE = `margin:0 0 1em;${FONT}`;
 const BOLD_HTML = /<\s*(?:strong|b)\s*>([\s\S]*?)<\s*\/\s*(?:strong|b)\s*>/gi;
 const BOLD_MARKERS = /\*\*([^*\n]+)\*\*/g;
 
+// ── Links in the plain-text half ─────────────────────────────────────────────
+//
+// A link is two things: words to read and an address to go to. Stripping the
+// tags keeps the words and throws the address away, which is fine when the
+// words ARE the address — the signature reads "www.sweetbyte.co.uk" either way
+// — and useless when they are not. "Unsubscribe" with no address is a person
+// told they may opt out and given no way to do it. A client name with no
+// address is an example website nobody can look at.
+//
+// So the address is added in brackets after the words, and only when it would
+// tell the reader something the words do not already say. A link whose text is
+// its own address is left alone rather than printed twice, a mailto or a
+// telephone link keeps just its words for the same reason, and a link wrapped
+// around a picture with no words at all disappears, because "( )" in the middle
+// of a signature is worse than nothing.
+const ANCHOR_HTML = /<\s*a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\s*\/\s*a\s*>/gi;
+
+function anchorToText(_match, dq, sq, inner) {
+  const words = String(inner || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  if (!words) return '';
+
+  const address = String(dq || sq || '').trim();
+  if (!address) return words;
+  if (/^(?:mailto:|tel:|#)/i.test(address)) return words;
+
+  const bare = (v) => v.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  const a = bare(address);
+  const w = bare(words);
+  if (!a || (w && (w.includes(a) || a.includes(w)))) return words;
+
+  return `${words} (${address})`;
+}
+
 /**
  * Styled paragraphs → plain text, blank line between paragraphs.
  *
@@ -75,6 +108,10 @@ const BOLD_MARKERS = /\*\*([^*\n]+)\*\*/g;
 export function htmlToText(html, { keepBold = false } = {}) {
   return String(html || '')
     .replace(/<\s*br\s*\/?>/gi, '\n')
+    // Links before anything strips tags, for the same reason as bold: once the
+    // generic tag strip below has run, the address is gone and cannot be
+    // recovered from the words that are left.
+    .replace(ANCHOR_HTML, anchorToText)
     // Bold first, while the tags are still intact. Once the generic tag strip
     // below has run there is nothing left to tell a bold label from any other
     // words in the sentence.

@@ -74,6 +74,12 @@ function laneLabel(key) {
   return LANE_LABELS[key] || key;
 }
 
+// The lanes that end their email with example websites. Kept in step with
+// LANES_WITH_EXAMPLES in server/services/keepwarm-examples.js, which is the one
+// that decides; this list only decides whether the box is drawn. A lane named
+// here and not there gets a box that saves nothing, so they move together.
+const LANES_WITH_EXAMPLES = ['website'];
+
 const ROW_COLUMNS = '34px minmax(0, 0.9fr) 120px minmax(0, 1.1fr) minmax(0, 1.4fr) 128px';
 
 // The colours the Audience list uses for the same pill, so a greeting reads the
@@ -230,6 +236,171 @@ function LaneDraft({ draft, label, ticked, busy, onOpen, onApprove, onBin, onRew
           ? 'This one has gone. Write another to send this lane a different email.'
           : `Approving puts it in the queue. It goes to the ${ticked} ticked ${ticked === 1 ? 'person' : 'people'} in this lane and nobody else.`}
       </div>
+    </div>
+  );
+}
+
+// ── The example websites for a lane ──────────────────────────────────────────
+//
+// The list Billy keeps himself, rather than a list hardcoded in a file, so a
+// site can be added or dropped without asking for a code change.
+//
+// Two of them go at the foot of every email this lane writes, taken in turn
+// from the top of the list, and the link the reader sees is the CLIENT'S NAME
+// rather than the address. The panel says which two are next, because the
+// rotation is somewhere in the middle of a list shown in the order it was typed
+// and "press Write and find out" is not a good answer.
+//
+// Only shown on lanes that carry examples. Everything else has no box at all
+// rather than an empty one.
+function ExamplesBox({ laneKey, label }) {
+  const [rows, setRows]   = useState(null);
+  const [next, setNext]   = useState([]);
+  const [busy, setBusy]   = useState(false);
+  const [error, setError] = useState(null);
+  const [saved, setSaved] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/keepwarm/interests/${encodeURIComponent(laneKey)}/examples`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not read the example sites');
+      setRows(d.sites || []);
+      setNext(d.next || []);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+      setRows([]);
+    }
+  }, [laneKey]);
+
+  useEffect(() => { setSaved(false); load(); }, [load]);
+
+  function edit(index, field, value) {
+    setSaved(false);
+    setRows(prev => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  }
+
+  function addRow() {
+    setSaved(false);
+    setRows(prev => [...prev, { name: '', url: '' }]);
+  }
+
+  function removeRow(index) {
+    setSaved(false);
+    setRows(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/interests/${encodeURIComponent(laneKey)}/examples`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sites: rows.filter(x => (x.name || '').trim() || (x.url || '').trim()) }),
+      });
+      const d = await r.json();
+      // A refused address refuses the whole save and says which one. Nothing is
+      // stored, so the box still shows exactly what was typed and the line that
+      // needs fixing is still on screen.
+      if (!r.ok) throw new Error(d.error || 'Could not save the list');
+      setRows(d.sites || []);
+      setNext(d.next || []);
+      setSaved(true);
+    } catch (err) {
+      setError(err.message);
+      setSaved(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const COLUMNS = '1fr 1.3fr 30px';
+  const inputStyle = {
+    width: '100%', boxSizing: 'border-box', font: 'inherit', fontSize: 13, color: TEXT,
+    background: CARD, border: `1px solid ${BORDER}`, borderRadius: 6, padding: '7px 9px',
+  };
+
+  return (
+    <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>Example sites for this email</span>
+        <span style={{ fontSize: 12, color: MUTED }}>
+          {next.length
+            ? `Next up: ${next.map(s => s.name).join(', ')}`
+            : 'No sites saved yet'}
+        </span>
+      </div>
+
+      <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
+        Two of these go at the foot of every {label} email, just above the signature, taken in turn
+        so two emails running do not show the same pair. The reader sees the client name and clicks
+        it. Studio writes the sentence that introduces them fresh each time. Leave the list empty and
+        the email simply has no examples line.
+      </div>
+
+      {rows === null
+        ? <div style={{ fontSize: 13, color: MUTED }}>Loading…</div>
+        : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: COLUMNS, gap: 8, fontSize: 12, color: MUTED }}>
+              <span>Client name</span>
+              <span>Address</span>
+              <span />
+            </div>
+
+            {rows.map((row, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: COLUMNS, gap: 8, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={row.name || ''}
+                  onChange={e => edit(i, 'name', e.target.value)}
+                  placeholder="Kent Garage Equipment"
+                  style={inputStyle}
+                />
+                <input
+                  type="text"
+                  value={row.url || ''}
+                  onChange={e => edit(i, 'url', e.target.value)}
+                  placeholder="kentgarageequipment.co.uk"
+                  style={inputStyle}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeRow(i)}
+                  title="Take this one off the list"
+                  style={{
+                    font: 'inherit', fontSize: 15, lineHeight: 1, color: TERTIARY,
+                    background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+
+            {rows.length === 0 && (
+              <div style={{ fontSize: 13, color: MUTED, padding: '4px 0' }}>
+                Nothing on the list yet.
+              </div>
+            )}
+          </div>
+        )}
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <SmallButton onClick={addRow} disabled={rows === null}>Add a site</SmallButton>
+        <SmallButton tone="primary" onClick={save} disabled={busy || rows === null}>
+          {busy ? 'Saving…' : 'Save list'}
+        </SmallButton>
+        {saved && <span style={{ fontSize: 12, color: SB.dark }}>Saved.</span>}
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 13, color: '#A32D2D', lineHeight: 1.6 }}>
+          {error} Nothing was saved, so the list on screen is still what you typed.
+        </div>
+      )}
     </div>
   );
 }
@@ -610,6 +781,13 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
           </div>
 
           {note && <div style={{ fontSize: 13, color: SB.dark }}>{note}</div>}
+
+          {/* Website only for now. The list is stored per lane on the server, so
+              switching Custom apps on later is a key on a list and not a
+              rebuild — this line is the only thing the screen needs to know. */}
+          {LANES_WITH_EXAMPLES.includes(selected) && (
+            <ExamplesBox laneKey={selected} label={currentLabel} />
+          )}
 
           {draft
             ? (

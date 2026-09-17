@@ -112,11 +112,18 @@ export const ALLOWED_COUNTS = [3, 6, 9];
  * on-screen preview, which renders in a browser where cid: means nothing, keeps
  * showing the pictures.
  *
+ * `examplesHtml` is the line of example websites that sits between the body and
+ * the signature on a Website lane email. It is built in keepwarm-examples.js
+ * from what was frozen onto the draft, and passed in finished, because the one
+ * thing it must never be is part of the body: the body checker refuses markup,
+ * and the editing box would mangle a link the first time a draft was saved.
+ * Empty for every email that has none, which is most of them.
+ *
  * `unsubUrl` is optional only so the preview can render before an address is
  * known. A send must always pass one — an unsubscribe link is not decoration
  * on a repeat marketing email, it is the thing that makes sending it lawful.
  */
-export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, inline = false }) {
+export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, inline = false, examplesHtml = '' }) {
   const greeting = `<p style="${P_STYLE}">Hi ${firstName || 'there'},</p>`;
 
   const optOut = unsubUrl
@@ -132,6 +139,7 @@ export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, i
   return `<div style="max-width:600px;${FONT}color:#222;">
 ${greeting}
 ${bodyHtml}
+${examplesHtml || ''}
 ${signatureHtml({ inline })}
 ${optOut}
 ${disclaimerHtml()}

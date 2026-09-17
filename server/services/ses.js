@@ -345,9 +345,15 @@ export async function sendEmail({
   campaignId, subscriberId, baseUrl,
   track_opens = false, track_clicks = false, track_unsub = false,
   inReplyTo = null, references = null, attachments = [], inlineImages = [],
+  listUnsubscribeUrl = null,
 }) {
   let finalHtml = htmlBody;
-  let listUnsubUrl = null;
+  // A caller that already has its own opt-out link can supply it directly. That
+  // is how keep-warm gets the one-click Unsubscribe button Gmail and Outlook
+  // draw beside the sender's name: it is not a campaign, it has no subscriber
+  // id, and the tracking path below would never give it one. Defaults to null,
+  // so every existing caller behaves exactly as it did.
+  let listUnsubUrl = listUnsubscribeUrl || null;
 
   // Tracking is only ever applied when we have campaign + subscriber context
   // (rules out test sends), AND at least one signal is requested.
