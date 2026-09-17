@@ -273,13 +273,247 @@ function ManualRow({ row, onRemove, busy }) {
   );
 }
 
+// The catch-up list.
+//
+// Everybody carrying a topic that was set here rather than in WorkTrackr. The
+// point of the list is to empty it: tick these across in the CRM when you are
+// next in there, and Studio stops having an opinion of its own. A row that has
+// been mirrored says so and can be cleared, because Studio's copy is then doing
+// nothing at all.
+//
+// Draws nothing when there is nothing on it, which is the normal state.
+function HandSetTopicsCard({ reloadKey }) {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/keepwarm/people/hand-set');
+      const d = await r.json();
+      if (r.ok) setRows(d.rows || []);
+    } catch { /* the card just stays hidden */ }
+  }, []);
+
+  useEffect(() => { load(); }, [load, reloadKey]);
+
+  async function clearOne(email) {
+    setBusy(email);
+    try {
+      await fetch(`/api/keepwarm/people/${encodeURIComponent(email)}/interests`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interests: [] }),
+      });
+      await load();
+    } catch { /* leave the row alone; pressing again tries again */ }
+    finally { setBusy(null); }
+  }
+
+  if (!rows || !rows.length) return null;
+
+  return (
+    <Card>
+      <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
+        Topics set here, not in WorkTrackr ({rows.length})
+      </h2>
+      <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
+        These people are in a lane because of a tick made in Studio. Nothing is sent to WorkTrackr,
+        so the CRM still says what it always said. Tick them across over there when you get a
+        chance and clear the row here, and the two agree again.
+      </p>
+
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden' }}>
+        {rows.map((r, i) => (
+          <div
+            key={r.email}
+            style={{
+              display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr) 110px',
+              gap: 10, alignItems: 'center', padding: '10px 12px', fontSize: 13,
+              borderTop: i === 0 ? 'none' : `1px solid ${BORDER}`,
+            }}
+          >
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ color: TEXT }}>{r.companyName || r.email}</div>
+              <div style={{ fontSize: 12, color: TERTIARY }}>{r.contactName || r.email}</div>
+            </div>
+            <div style={{ fontSize: 12, color: MUTED }}>
+              WorkTrackr: {r.fromWorkTrackr.length ? r.fromWorkTrackr.join(', ') : 'nothing'}
+            </div>
+            <div style={{ fontSize: 12, color: TEXT }}>
+              Set here: {r.handSet.join(', ')}
+              {!r.inLoop && (
+                <span style={{ display: 'block', color: '#854F0B', marginTop: 2 }}>
+                  Not in the loop, so this is doing nothing
+                </span>
+              )}
+              {r.mirrored && (
+                <span style={{ display: 'block', color: TERTIARY, marginTop: 2 }}>
+                  Now ticked in WorkTrackr too
+                </span>
+              )}
+            </div>
+            <div style={{ justifySelf: 'end' }}>
+              <Button onClick={() => clearOne(r.email)} disabled={busy === r.email}>
+                {busy === r.email ? 'Clearing…' : 'Clear'}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// Adding ONE person, by searching for their company rather than typing its id.
+//
+// The paste box below is still the right tool for a list. This is for the
+// ordinary case of one address off a business card, where hunting down a
+// WorkTrackr id in order to type it out is the entire difficulty — and getting
+// it wrong, or leaving it out, means the person joins the loop with no sales
+// stage and is then silently left out of every send.
+//
+// Studio already holds every company WorkTrackr has ever sent, so it can find
+// the id itself. That is all this box does.
+function AddOnePersonCard({ onAdded }) {
+  const [email, setEmail]     = useState('');
+  const [contact, setContact] = useState('');
+  const [query, setQuery]     = useState('');
+  const [hits, setHits]       = useState([]);
+  const [picked, setPicked]   = useState(null);
+  const [busy, setBusy]       = useState(false);
+  const [error, setError]     = useState(null);
+  const [done, setDone]       = useState(null);
+
+  useEffect(() => {
+    if (picked || query.trim().length < 2) { setHits([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/keepwarm/companies?q=${encodeURIComponent(query.trim())}`);
+        const d = await r.json();
+        if (!cancelled && r.ok) setHits(d.companies || []);
+      } catch { /* the box just shows nothing */ }
+    }, 200);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, picked]);
+
+  async function add() {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      const r = await fetch('/api/keepwarm/loop/add-one', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          contactName: contact.trim(),
+          companyId: picked?.id || '',
+          companyName: picked?.name || '',
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not add them');
+      setDone(d.restored ? 'Put back into the loop.' : 'Added to the loop.');
+      setEmail(''); setContact(''); setQuery(''); setPicked(null); setHits([]);
+      if (onAdded) onAdded();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = {
+    width: '100%', boxSizing: 'border-box', padding: '9px 11px', fontSize: 13,
+    border: `1px solid ${BORDER}`, borderRadius: 8, background: BG, color: TEXT, font: 'inherit',
+  };
+
+  return (
+    <Card>
+      <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
+        Add one person
+      </h2>
+      <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
+        Search for the company instead of typing its WorkTrackr id. Adding somebody here does not
+        email them — they join the audience for the next keep-warm send.
+      </p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Email</div>
+          <input type="text" value={email} onChange={e => setEmail(e.target.value)} placeholder="anna@sentek.co.uk" style={field} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Contact name</div>
+          <input type="text" value={contact} onChange={e => setContact(e.target.value)} placeholder="Anna Smith" style={field} />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>Company in WorkTrackr</div>
+        {picked
+          ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 11px', border: `1px solid ${BORDER}`, borderRadius: 8, background: BG }}>
+              <span style={{ fontSize: 13, color: TEXT }}>{picked.name}</span>
+              <span style={{ fontSize: 12, color: MUTED }}>{picked.stageLabel}</span>
+              <button
+                type="button"
+                onClick={() => { setPicked(null); setQuery(''); }}
+                style={{ font: 'inherit', fontSize: 12, color: TERTIARY, background: 'none', border: 'none', cursor: 'pointer', marginLeft: 'auto' }}
+              >
+                change
+              </button>
+            </div>
+          )
+          : (<>
+            <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="Start typing a company name" style={field} />
+            {hits.length > 0 && (
+              <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, marginTop: 4, overflow: 'hidden' }}>
+                {hits.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => { setPicked(c); setHits([]); if (!contact.trim() && c.contact) setContact(c.contact); }}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left', font: 'inherit', fontSize: 13,
+                      padding: '9px 11px', background: 'none', border: 'none', borderTop: `1px solid ${BORDER}`,
+                      cursor: 'pointer', color: TEXT,
+                    }}
+                  >
+                    {c.name} <span style={{ color: MUTED }}>· {c.stageLabel}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>)}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+        <Button tone="primary" disabled={busy || !email.trim() || !picked} onClick={add}>
+          {busy ? 'Adding…' : 'Add to the loop'}
+        </Button>
+        {!picked && (
+          <span style={{ fontSize: 12, color: '#854F0B', background: '#FBF3E4', borderRadius: 7, padding: '5px 9px', lineHeight: 1.5 }}>
+            A company is needed. Without one there is no sales stage, and anybody with no stage is
+            left out of every send.
+          </span>
+        )}
+        {done && <span style={{ fontSize: 12, color: SB.dark }}>{done}</span>}
+      </div>
+
+      {error && <p style={{ fontSize: 13, color: '#A32D2D', margin: '10px 0 0', lineHeight: 1.6 }}>{error}</p>}
+    </Card>
+  );
+}
+
 // The paste box. Kept as its own component so the Audience card does not grow a
 // third responsibility inline.
 function AddByHandCard({ text, onText, onAdd, busy, result }) {
   return (
     <Card>
       <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>
-        Add addresses by hand
+        Add a list of addresses
       </h2>
       <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
         For people whose address you have but who have never been sent an introduction email —
@@ -2339,13 +2573,17 @@ export default function KeepWarm() {
             </>)}
 
             {tab === 'audience' && (
-              <AddByHandCard
-                text={manualText}
-                onText={setManualText}
-                onAdd={addByHand}
-                busy={manualBusy}
-                result={manualResult}
-              />
+              <>
+                <HandSetTopicsCard reloadKey={manualRows ? manualRows.length : 0} />
+                <AddOnePersonCard onAdded={() => { loadManual(); loadAudience(listMode, listSearch); }} />
+                <AddByHandCard
+                  text={manualText}
+                  onText={setManualText}
+                  onAdd={addByHand}
+                  busy={manualBusy}
+                  result={manualResult}
+                />
+              </>
             )}
 
             {tab === 'drafts' && (<>

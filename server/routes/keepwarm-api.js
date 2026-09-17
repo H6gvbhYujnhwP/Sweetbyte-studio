@@ -54,6 +54,9 @@ import {
   laneAudience,
   setDraftSkips,
   INTEREST_KEYS,
+  setHandInterests,
+  handInterestRows,
+  searchCompanies,
 } from '../services/keepwarm-store.js';
 import {
   generateEmails,
@@ -317,6 +320,127 @@ router.post('/interests/:key/generate', async (req, res) => {
   } catch (err) {
     finishBatch(batchId, err.message);
     console.error('[keepwarm] lane generation failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /companies?q=
+ *
+ * Companies Studio already knows about, for the box that adds somebody to the
+ * loop by hand. Searching by name is the whole point: the WorkTrackr id is what
+ * makes adding somebody by hand a chore, and Studio already holds it.
+ */
+router.get('/companies', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) return res.json({ companies: [] });
+    res.json({ companies: searchCompanies(q) });
+  } catch (err) {
+    console.error('[keepwarm] company search failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /loop/add-one  { email, contactName, companyId, companyName }
+ *
+ * One person, from the form rather than the paste box.
+ *
+ * Goes through exactly the same door as a paste — bounced, unsubscribed,
+ * already in the loop and previously removed by hand are all decided in one
+ * place, and this route is not allowed its own opinion about any of them.
+ *
+ * A company is required. Without one there is no sales stage, and no stage
+ * means the person is excluded from every send; adding somebody who can never
+ * be emailed and saying nothing would be the worst kind of quiet failure.
+ */
+router.post('/loop/add-one', (req, res) => {
+  try {
+    const body = req.body || {};
+    const email = String(body.email || '').trim();
+    const companyId = String(body.companyId || '').trim();
+    const companyName = String(body.companyName || '').trim();
+    const contactName = String(body.contactName || '').trim();
+
+    if (!email) return res.status(400).json({ error: 'An email address is needed.' });
+    if (!companyId || !companyName) {
+      return res.status(400).json({
+        error: 'Pick the company this person is at. Without one Studio has no sales stage for them, and anybody with no stage is left out of every send.',
+      });
+    }
+
+    // The reader that takes this line treats tabs, commas, semicolons and runs
+    // of two or more spaces as column separators, so any of those left inside a
+    // name would split it in half — and the half that landed in the second
+    // column would be read as the person's first name. "Sentek Engineering,
+    // Ltd" greeting somebody as "Hi Ltd," is a real way for this to go wrong,
+    // so the separators are taken out of the names before the line is built.
+    const clean = (v) => v.replace(/[\t\r\n,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const line = [clean(companyName), clean(contactName), email, companyId].filter(Boolean).join('\t');
+
+    const result = addManualToLoop(line);
+    if (!result.added && !result.restored) {
+      const why = result.skipped?.[0]?.reason || (result.unreadable?.length ? 'that address could not be read' : 'nothing was added');
+      return res.status(400).json({ error: `Not added — ${why}.` });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] add one to loop failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /people/:email/interests  { interests: [key, ...] }
+ *
+ * The topics held against one person BY HAND, here in Studio.
+ *
+ * Added to whatever WorkTrackr says rather than replacing it, and kept in their
+ * own table so a push can never wipe them. An empty list clears them, which is
+ * the "put it back to what WorkTrackr says" button.
+ *
+ * Nothing is sent to WorkTrackr. The link between the two only runs one way,
+ * and a chip in WorkTrackr belongs to the company while this belongs to one
+ * person, so there is no honest way to mirror it from here.
+ */
+router.put('/people/:email/interests', (req, res) => {
+  try {
+    const email = String(req.params.email || '').trim();
+    const wanted = (req.body || {}).interests;
+    if (!Array.isArray(wanted)) return res.status(400).json({ error: 'A list of topics is needed.' });
+
+    const unknown = wanted.filter(k => !INTEREST_KEYS.some(x => x.key === k));
+    if (unknown.length) return res.status(400).json({ error: `Studio has no lane called "${unknown[0]}".` });
+
+    const result = setHandInterests(email, wanted);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] set hand interests failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /people/hand-set
+ *
+ * The catch-up list: everybody carrying a topic set here rather than in the
+ * CRM, with what WorkTrackr says beside it. Work through it in WorkTrackr and
+ * the list empties itself.
+ */
+router.get('/people/hand-set', (_req, res) => {
+  try {
+    const rows = handInterestRows();
+    res.json({
+      rows,
+      total: rows.length,
+      // Already ticked in WorkTrackr since, so Studio's copy is doing nothing
+      // and can be cleared without changing who gets what.
+      mirrored: rows.filter(r => r.mirrored).length,
+    });
+  } catch (err) {
+    console.error('[keepwarm] hand-set list failed:', err);
     res.status(500).json({ error: err.message });
   }
 });

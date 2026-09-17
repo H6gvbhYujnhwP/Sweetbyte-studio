@@ -54,6 +54,14 @@ const LIST_MAX_HEIGHT = 300;
 // The lane labels, for naming the topic somebody has gone to instead. Keys are
 // permanent, which is what makes a local copy safe; an unrecognised one falls
 // back to the key rather than blanking the line.
+// The lanes a topic can be set to by hand, in the order they are worked
+// through. Kept in step with INTEREST_KEYS on the server, which is the one that
+// decides; an unknown key is refused there rather than stored.
+const INTEREST_ORDER = [
+  'cyber_security', 'internet', 'wifi', 'website',
+  'domains', 'microsoft_365', 'voip', 'custom_apps',
+];
+
 const LANE_LABELS = {
   // Retired as a lane of its own and merged into the general email. Kept here
   // so a draft written before the merge still names itself in plain words.
@@ -73,7 +81,7 @@ function laneLabel(key) {
   return LANE_LABELS[key] || key;
 }
 
-const ROW_COLUMNS = '34px minmax(0, 0.9fr) 120px minmax(0, 1.1fr) minmax(0, 1.4fr) 128px';
+const ROW_COLUMNS = '34px minmax(0, 0.9fr) 120px minmax(0, 1.1fr) minmax(0, 1.3fr) 118px 62px';
 
 // The colours the Audience list uses for the same pill, so a greeting reads the
 // same wherever it is shown.
@@ -504,16 +512,17 @@ function ExamplesBox({ laneKey, label, reloadKey, onMeta }) {
 }
 
 // ── One person in the lane ───────────────────────────────────────────────────
-function PersonRow({ person, ticked, onToggle, last }) {
+function PersonRow({ person, ticked, onToggle, last, onChanged }) {
   const seen = fmtDate(person.seenAt);
   const dim = !ticked || person.lockedOut;
+  const [open, setOpen] = useState(false);
 
   return (
+    <div style={{ borderBottom: last && !open ? 'none' : `1px solid ${ROW_LINE}` }}>
     <label
       style={{
         display: 'grid', gridTemplateColumns: ROW_COLUMNS, gap: 10, alignItems: 'center',
         padding: '10px 12px',
-        borderBottom: last ? 'none' : `1px solid ${ROW_LINE}`,
         cursor: 'pointer',
       }}
     >
@@ -566,7 +575,122 @@ function PersonRow({ person, ticked, onToggle, last }) {
               ? `${laneLabel(person.nextTopic)} first`
               : (person.stageLabel || 'No stage')}
       </span>
+
+      {/* Inside the label, so the button has to say plainly that it is not a
+          tick. Without both of these, opening the topics panel would also tick
+          or untick the person, which is the last thing you want on a screen
+          that decides who gets emailed. */}
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(v => !v); }}
+        title="Set what this person is interested in"
+        style={{
+          font: 'inherit', fontSize: 12,
+          color: (person.handSet || []).length ? SB.dark : TERTIARY,
+          background: (person.handSet || []).length ? SB.tint : 'none',
+          border: `1px solid ${(person.handSet || []).length ? SB.light : BORDER}`,
+          borderRadius: 6, padding: '3px 8px', cursor: 'pointer', justifySelf: 'start',
+        }}
+      >
+        {open ? 'Close' : 'Topics'}
+      </button>
     </label>
+
+    {open && <TopicsPanel person={person} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+// ── What one person is interested in ─────────────────────────────────────────
+//
+// Two lists, never merged on screen: what WorkTrackr says, and what has been
+// set here by hand. Shown side by side because the one thing that must never
+// happen is Studio quietly disagreeing with the CRM and neither screen saying
+// so.
+//
+// Ticking a topic here ADDS it. It does not cancel anything WorkTrackr says,
+// and it is kept where a push cannot overwrite it. Nothing is sent back to
+// WorkTrackr — the link only runs one way, and a chip over there belongs to the
+// whole company while this belongs to one person.
+function TopicsPanel({ person, onChanged }) {
+  const fromWorkTrackr = person.fromWorkTrackr || [];
+  const [handSet, setHandSet] = useState(() => new Set(person.handSet || []));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function save(next) {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/people/${encodeURIComponent(person.email)}/interests`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interests: Array.from(next) }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not save that');
+      setHandSet(new Set(d.interests || []));
+      if (onChanged) onChanged();
+    } catch (err) {
+      setError(err.message);
+      setHandSet(new Set(person.handSet || []));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggle(key) {
+    const next = new Set(handSet);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setHandSet(next);
+    save(next);
+  }
+
+  return (
+    <div style={{ background: '#FBFDFE', padding: '12px 14px 14px 46px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
+        WorkTrackr says: <span style={{ color: TEXT }}>
+          {fromWorkTrackr.length ? fromWorkTrackr.map(laneLabel).join(', ') : 'nothing ticked'}
+        </span>. Ticking here adds a topic for this person only. It is kept in Studio and is never
+        sent back to WorkTrackr.
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+        {INTEREST_ORDER.map(key => {
+          const fromCrm = fromWorkTrackr.includes(key);
+          const byHand = handSet.has(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              disabled={busy || fromCrm}
+              onClick={() => toggle(key)}
+              title={fromCrm ? 'Already ticked in WorkTrackr' : undefined}
+              style={{
+                font: 'inherit', fontSize: 12,
+                color: fromCrm ? MUTED : (byHand ? SB.onPrimary : SB.strong),
+                background: fromCrm ? '#f2f2ee' : (byHand ? SB.primary : CARD),
+                border: `1px solid ${fromCrm ? BORDER : (byHand ? SB.cyanDeep : BORDER)}`,
+                borderRadius: 999, padding: '4px 11px',
+                cursor: fromCrm || busy ? 'default' : 'pointer',
+              }}
+            >
+              {laneLabel(key)}{fromCrm ? ' · in WorkTrackr' : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {handSet.size > 0 && (
+        <div>
+          <SmallButton onClick={() => { setHandSet(new Set()); save(new Set()); }} disabled={busy}>
+            Put back to what WorkTrackr says
+          </SmallButton>
+        </div>
+      )}
+
+      {error && <div style={{ fontSize: 12, color: '#A32D2D', lineHeight: 1.6 }}>{error}</div>}
+    </div>
   );
 }
 
@@ -593,6 +717,11 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
   // What the examples box found for this lane. The panel cannot know whether a
   // lane carries examples without asking, and the box is the thing that asks.
   const [examplesMeta, setExamplesMeta] = useState(null);
+  // Bumped when a topic is set by hand. The lane's membership changes the
+  // moment that happens — somebody can join this lane, or be pushed into
+  // another one — so the list and the counts are both re-read rather than left
+  // showing what was true before the change.
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // The lane the ticks on screen belong to. Without this, switching from
   // Microsoft 365 to Website for a moment before the new list arrives would
@@ -647,7 +776,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
       }
     }, search ? 220 : 0);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [selected, search, draftId]);
+  }, [selected, search, draftId, refreshTick]);
 
   // Save the ticks against the draft. Only possible once a draft exists — until
   // then the ticks are held on screen and written the moment one does.
@@ -979,6 +1108,7 @@ export default function KeepWarmLanes({ selected, onSelect, onOpenDraft, onDraft
                       ticked={!unticked.has(String(p.email).toLowerCase())}
                       onToggle={() => toggleOne(p.email)}
                       last={i === people.rows.length - 1}
+                      onChanged={() => { loadCounts(); setRefreshTick(v => v + 1); }}
                     />
                   ))}
                 </div>

@@ -260,6 +260,38 @@ db.exec(`
   );
 `);
 
+// Topics set on one person BY HAND, here in Studio.
+//
+// Why this is its own table and not a write into the two above: both of those
+// are overwritten wholesale every time WorkTrackr pushes that company. A hand
+// set topic written there would survive until the next time anybody edited the
+// record over there, then vanish — days later, silently, with the person
+// quietly dropping out of a lane nobody was watching.
+//
+// Kept separately, a push can never touch it. The screen shows both what
+// WorkTrackr says and what Studio is using, so the two are never in silent
+// disagreement, and putting somebody back is deleting one row.
+//
+// ADDED TO what WorkTrackr says rather than replacing it. Ticking somebody for
+// Website by hand should not quietly cancel the Cyber security tick somebody
+// made in the CRM; the person ends up in both lanes and rotates between them
+// like anybody else with two topics.
+//
+// Per ADDRESS, not per company. This is a note about one person — "send Anna
+// the website one as well" — and a company-wide version of that belongs in
+// WorkTrackr, where the chips actually live.
+//
+// The stage rule is untouched by any of this. Interest decides the topic;
+// stage decides whether somebody is in the loop at all, and a hand-set topic
+// cannot put a dead company or a customer back into the audience.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS keepwarm_hand_interests (
+    email      TEXT PRIMARY KEY,
+    interests  TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
 /**
  * The ten service interests, in the order the lanes are shown and the order a
  * person's topics are worked through.
@@ -371,6 +403,133 @@ export function interestsByEmail() {
  */
 function keepKnown(list) {
   return (Array.isArray(list) ? list : []).filter(k => KNOWN_INTERESTS.has(String(k || '').trim().toLowerCase()));
+}
+
+/**
+ * Topics set by hand in Studio, as a Map keyed on the lowercased address.
+ */
+export function handInterests() {
+  const map = new Map();
+  for (const row of db.prepare(`SELECT email, interests FROM keepwarm_hand_interests`).all()) {
+    try {
+      map.set(String(row.email).toLowerCase(), keepKnown(JSON.parse(row.interests || '[]')));
+    } catch {
+      map.set(String(row.email).toLowerCase(), []);
+    }
+  }
+  return map;
+}
+
+/**
+ * Put two lists of topics together and hand back one, in the fixed order the
+ * lanes are worked through.
+ *
+ * The order matters more than it looks: it is what decides which topic a person
+ * is due next, and it has to be the order in INTEREST_KEYS rather than the
+ * order anybody happened to tick things. A topic set by hand takes its place in
+ * that order like any other, so somebody moved into Website does not jump the
+ * queue ahead of a topic they were already waiting on.
+ */
+function mergeInterests(fromWorkTrackr, byHand) {
+  const all = keepKnown([...(fromWorkTrackr || []), ...(byHand || [])]);
+  const unique = Array.from(new Set(all));
+  unique.sort((a, b) => INTEREST_KEYS.findIndex(x => x.key === a) - INTEREST_KEYS.findIndex(x => x.key === b));
+  return unique;
+}
+
+/**
+ * Set, or clear, the topics held by hand against one address.
+ *
+ * An empty list deletes the row rather than storing "[]", so "no hand-set
+ * topics" is one state and not two. Unknown keys are dropped rather than
+ * refused: a lane Studio has retired should read as nothing, exactly as it does
+ * everywhere else.
+ */
+export function setHandInterests(email, keys) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return { error: 'No address given.' };
+
+  const kept = keepKnown(Array.isArray(keys) ? keys : []);
+  const unique = Array.from(new Set(kept));
+
+  if (!unique.length) {
+    db.prepare('DELETE FROM keepwarm_hand_interests WHERE email = ?').run(e);
+    return { email: e, interests: [] };
+  }
+
+  db.prepare(`
+    INSERT INTO keepwarm_hand_interests (email, interests, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(email) DO UPDATE SET interests = excluded.interests, updated_at = datetime('now')
+  `).run(e, JSON.stringify(unique));
+
+  return { email: e, interests: unique };
+}
+
+/**
+ * Everybody who has a topic set by hand, for the catch-up list.
+ *
+ * Shows what WorkTrackr says next to what was set here, because the point of
+ * the list is to work through it in the CRM until there is nothing left on it.
+ */
+export function handInterestRows() {
+  const byHand = handInterests();
+  if (!byHand.size) return [];
+
+  const own = interestsByEmail();
+  const byCompany = companyInterests();
+
+  const known = new Map();
+  for (const p of buildAudience().included) known.set(String(p.email).toLowerCase(), p);
+
+  const rows = [];
+  for (const [email, interests] of byHand) {
+    const p = known.get(email) || null;
+    const fromWorkTrackr = (own.get(email) && own.get(email).length)
+      ? own.get(email)
+      : (byCompany.get(String(p?.externalCompanyId || '')) || []);
+
+    rows.push({
+      email,
+      contactName:       p?.contactName || null,
+      companyName:       p?.companyName || null,
+      externalCompanyId: p?.externalCompanyId || null,
+      stageLabel:        p?.stageLabel || null,
+      // Set by hand here but not in the loop at all — excluded by stage, or
+      // bounced, or opted out. Worth seeing: the topic is doing nothing.
+      inLoop:            !!p,
+      handSet:           interests,
+      fromWorkTrackr,
+      // Already ticked over in WorkTrackr, so the hand-set copy is no longer
+      // doing anything and can be cleared.
+      mirrored:          interests.every(k => fromWorkTrackr.includes(k)),
+    });
+  }
+
+  rows.sort((a, b) => String(a.companyName || a.email).localeCompare(String(b.companyName || b.email)));
+  return rows;
+}
+
+/**
+ * Companies Studio knows about, for the box that adds somebody to the loop by
+ * hand. Searching this rather than asking for a WorkTrackr id is the whole
+ * point: the id is the thing nobody can be expected to type.
+ */
+export function searchCompanies(q, limit = 8) {
+  const term = `%${String(q || '').trim().toLowerCase()}%`;
+  return db.prepare(`
+    SELECT external_company_id AS id, company_name AS name, primary_contact AS contact, stage
+      FROM keepwarm_stages
+     WHERE company_name IS NOT NULL AND lower(company_name) LIKE ?
+     ORDER BY company_name
+     LIMIT ?
+  `).all(term, limit).map(r => ({
+    id: r.id,
+    name: r.name,
+    contact: r.contact || null,
+    stage: r.stage || null,
+    stageLabel: r.stage ? (STAGE_LABELS[r.stage] || r.stage) : 'No stage',
+  }));
 }
 
 /**
@@ -688,6 +847,12 @@ export function laneAudience(key, { q = '', draftId = null } = {}) {
         greeting:    p.greeting || null,
         stage:       p.stage || null,
         stageLabel:  p.stageLabel || null,
+        // What they are interested in, split by where it came from, so the row
+        // can show a hand-set topic as hand-set rather than passing it off as
+        // something WorkTrackr said.
+        interests:      p.interests || [],
+        fromWorkTrackr: p.fromWorkTrackr || [],
+        handSet:        p.handSet || [],
         seenAt,
         // Somebody who has had their fortnight's email cannot be sent another
         // one whatever the tick says, so the tick is forced off rather than
@@ -1228,6 +1393,7 @@ export function buildAudience() {
   // who gets emailed.
   const interests = interestsByEmail();
   const byCompany = companyInterests();
+  const byHand = handInterests();
 
   for (const row of rawAudience()) {
     // The person's own tags if WorkTrackr named them, otherwise the ticks made
@@ -1236,10 +1402,17 @@ export function buildAudience() {
     // company, and merging the two would mean nothing could ever be un-ticked
     // for one person without un-ticking it for the whole company.
     const own = interests.get(String(row.email).toLowerCase());
-    const resolved = (own && own.length)
+    const fromWorkTrackr = (own && own.length)
       ? own
       : (byCompany.get(String(row.external_company_id || '')) || []);
-    const p = project(row, resolved);
+
+    // Anything set on this person by hand in Studio is added to that. Added,
+    // not substituted: a topic ticked in the CRM is not cancelled by one noted
+    // here, and somebody with both rotates between them like anybody else.
+    const handSet = byHand.get(String(row.email).toLowerCase()) || [];
+    const resolved = handSet.length ? mergeInterests(fromWorkTrackr, handSet) : fromWorkTrackr;
+
+    const p = { ...project(row, resolved), fromWorkTrackr, handSet };
 
     // Same ordering rule as stageCounts: a dead address is also suppressed, so
     // asking the wrong question first would label every bounce "unsubscribed".
