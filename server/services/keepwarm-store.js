@@ -236,6 +236,15 @@ db.exec(`
  * The ten service interests, in the order the lanes are shown and the order a
  * person's topics are worked through.
  *
+ * BACKUPS IS NOT ON THIS LIST, deliberately. Sweetbyte does not send keep-warm
+ * emails about backups, so there is no lane for it and no email that could be
+ * written for one. It is also coming off the chip list in WorkTrackr, but
+ * Studio does not depend on that happening: an interest key Studio does not
+ * recognise is dropped on arrival, so anyone already ticked for backups simply
+ * reads as not having that tick. Somebody whose only tick was backups
+ * therefore counts as nothing ticked, and gets the general IT support email
+ * every fortnight like everybody else in that position.
+ *
  * Order matters twice over. It is the order the cards appear in, and it is the
  * order somebody with several interests receives them: ticked for Website and
  * Microsoft 365, they get Website first because it comes first in this list.
@@ -249,7 +258,6 @@ export const INTEREST_KEYS = [
   { key: 'wifi',           label: 'Managed Wi-Fi' },
   { key: 'website',        label: 'Website' },
   { key: 'domains',        label: 'Domains & hosting' },
-  { key: 'backups',        label: 'Backups' },
   { key: 'microsoft_365',  label: 'Microsoft 365' },
   { key: 'voip',           label: 'VoIP telephony' },
   { key: 'custom_apps',    label: 'Custom apps & automation' },
