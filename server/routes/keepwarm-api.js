@@ -41,7 +41,6 @@ import {
   updateDraft,
   setDraftStatus,
   moveDraftInSchedule,
-  setDraftSendDay,
   addManualToLoop,
   removeManual,
   removeAllManual,
@@ -105,6 +104,7 @@ import {
   runRecipients,
   activeRun,
   cadenceConfig,
+  setDraftSendDay,
 } from '../services/keepwarm-sender.js';
 
 // A lane key Studio recognises. '__none' is the people with nothing ticked, who
