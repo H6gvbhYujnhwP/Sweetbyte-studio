@@ -1138,15 +1138,30 @@ function UndoBar({ secondsLeft, count, onUndo, undoing }) {
 
 // ── Schedule ─────────────────────────────────────────────────────────────────
 
-function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, onRemove, busy }) {
+function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, onRemove, busy, sendDays, onSetDay }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '11px 14px', borderBottom: `1px solid ${BORDER}`,
     }}>
-      <div style={{ width: 92, fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
-        {fmtDate(slot.date)}
-      </div>
+      {/* Which Tuesday this one goes out on. Studio groups them itself — the
+          lane emails together, a general email on its own day — and this is how
+          that gets overruled for one email without touching the others. */}
+      <select
+        value={slot.date}
+        disabled={busy}
+        onChange={e => onSetDay(slot.draftId, e.target.value)}
+        aria-label="Which day this email goes out"
+        style={{
+          width: 116, fontSize: 13, color: slot.pinned ? TEXT : MUTED, fontFamily: 'inherit',
+          background: CARD, border: `1px solid ${slot.pinned ? SB.light : BORDER}`,
+          borderRadius: 7, padding: '5px 7px', cursor: busy ? 'default' : 'pointer',
+        }}
+      >
+        {(sendDays || []).concat((sendDays || []).includes(slot.date) ? [] : [slot.date])
+          .sort()
+          .map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
+      </select>
       {/* Which email this row actually is. On a send day there may be nine of
           these queued together — websites, business internet, general IT,
           domains and so on — and the subject lines alone are not enough to tell
@@ -1172,6 +1187,15 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, o
                 ? `Only the ${slot.projectedCount} ticked for ${laneLabel(slot.interest)}`
                 : 'Everybody in the loop'}
           </span>
+          {/* An email sharing a day with an earlier one reaches fewer people,
+              because nobody gets two in a fortnight. Said here rather than left
+              for afterwards: pressing Send on "317 people" and watching five go
+              out is the thing this line exists to prevent. */}
+          {typeof slot.countAlone === 'number' && slot.countAlone > slot.projectedCount && (
+            <span style={{ fontSize: 12, color: '#854F0B', background: '#FBF3E4', borderRadius: 999, padding: '2px 9px' }}>
+              {slot.countAlone - slot.projectedCount} already get an earlier email that day
+            </span>
+          )}
         </div>
       </div>
       <span style={{
@@ -1184,7 +1208,13 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, o
           Later rows show the same number as plain text: their real audience is
           a fortnight away and genuinely unknowable, so offering a list there
           would be showing today's names as though they were next time's. */}
-      {canSend ? (
+      {/* The list behind this number is the whole loop, which is the right
+          list for a general email and the wrong one for a lane email: the lane
+          reaches only the people whose turn that topic is, and its real list —
+          with the ticks — lives on the lane's own card. So a lane row shows its
+          headcount as plain text rather than offering a list that would be
+          somebody else's. */}
+      {canSend && !slot.interest ? (
         <button
           onClick={onToggle}
           style={{
@@ -1335,7 +1365,7 @@ function SlotList({ data, search, onSearch, isChecked, onToggle, onAll, onNone, 
 function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch,
                        isChecked, onToggleOne, onAll, onNone, selectedCount, handPicked,
                        testTo, onTestTo, onTest, testBusy, testNote, testError,
-                       onMove, onRemove, slotBusy, slotError }) {
+                       onMove, onRemove, slotBusy, slotError, onSetDay, openSlotId }) {
   if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const active = data.activeRun;
@@ -1383,20 +1413,42 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
       ) : (
         <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
           {data.slots.map((s, i) => {
-            const sendable = i === 0 && !active;
+            // Sendable when its own day has arrived. It used to be the top row
+            // only, from when a send day meant one email; several lane emails
+            // can now share a Tuesday and each is its own decision to press.
+            //
+            // Still one at a time. Two runs overlapping would land two emails on
+            // the same person within minutes, which reads as a fault whatever
+            // the copy says.
+            const sendable = s.dueNow && !active;
+            const firstOfDay = i === 0 || data.slots[i - 1].date !== s.date;
+            const sameDay = data.slots.filter(x => x.date === s.date);
             return (
               <div key={s.draftId}>
+                {firstOfDay && (
+                  <div style={{
+                    display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12,
+                    padding: '9px 14px', background: '#fafaf8',
+                    borderBottom: `1px solid ${BORDER}`, borderTop: i === 0 ? 'none' : `1px solid ${BORDER}`,
+                  }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{fmtDate(s.date)}</span>
+                    <span style={{ fontSize: 12, color: MUTED }}>
+                      {sameDay.length} {sameDay.length === 1 ? 'email' : 'emails'}
+                      {' · '}
+                      {sameDay.reduce((acc, x) => acc + x.projectedCount, 0)} people
+                      {sameDay.length > 1 && ' · nobody gets two'}
+                    </span>
+                  </div>
+                )}
                 <SlotRow
                   slot={s}
-                  // Only the top slot is sendable, and only when nothing else is
-                  // in flight. One send at a time — two overlapping runs would
-                  // land two emails on the same person within minutes, which
-                  // reads as a fault whatever the copy says.
+                  sendDays={data.sendDays || []}
+                  onSetDay={onSetDay}
                   canSend={sendable}
                   onSend={onSend}
                   sending={sending}
-                  expanded={sendable && listOpen}
-                  onToggle={onToggleList}
+                  expanded={sendable && !s.interest && listOpen && openSlotId === s.draftId}
+                  onToggle={() => onToggleList(s.draftId)}
                   onMove={onMove}
                   onRemove={onRemove}
                   // Reordering and removing are locked while a run is in
@@ -1406,7 +1458,7 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
                   // after the decision was made.
                   busy={Boolean(active) || slotBusy}
                 />
-                {sendable && listOpen && (
+                {sendable && !s.interest && listOpen && openSlotId === s.draftId && (
                   <SlotList
                     data={listData}
                     search={listSearch}
@@ -1632,6 +1684,9 @@ export default function KeepWarm() {
   // Audience tab's own list state so opening one does not disturb the search
   // you had typed on the other.
   const [listOpen, setListOpen]     = useState(false);
+  // Which row's list is open. More than one email can be sendable on the same
+  // day now, so "the list" has to say whose.
+  const [openSlotId, setOpenSlotId] = useState(null);
   const [listData, setListData]     = useState(null);
   const [listSearch, setListSearch] = useState('');
   // How many people carry a topic set here rather than in WorkTrackr. Held up
@@ -1820,6 +1875,28 @@ export default function KeepWarm() {
   useEffect(() => {
     if (schedule && schedule.activeRun) setListOpen(false);
   }, [schedule]);
+
+  // Move one approved email onto a different Tuesday. Studio groups them
+  // itself; this overrules the grouping for one email and leaves the rest where
+  // they are.
+  async function setSlotDay(draftId, date) {
+    setSlotBusy(true);
+    setSlotError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${encodeURIComponent(draftId)}/send-day`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not move that email');
+      await loadSchedule();
+    } catch (err) {
+      setSlotError(err.message);
+    } finally {
+      setSlotBusy(false);
+    }
+  }
 
   async function sendSlot(slot) {
     setSendError(null);
@@ -2818,7 +2895,13 @@ export default function KeepWarm() {
                 sending={sending}
                 sendError={sendError}
                 listOpen={listOpen}
-                onToggleList={() => setListOpen(v => !v)}
+                openSlotId={openSlotId}
+                onToggleList={(draftId) => {
+                  if (openSlotId === draftId && listOpen) { setListOpen(false); return; }
+                  setOpenSlotId(draftId);
+                  setListOpen(true);
+                }}
+                onSetDay={setSlotDay}
                 listData={listData}
                 listSearch={listSearch}
                 onListSearch={setListSearch}

@@ -930,6 +930,26 @@ try {
   console.error('[keepwarm] schedule_position migration failed:', err.message);
 }
 
+// The send day an approved draft has been pinned to by hand.
+//
+// NULL means "wherever the queue puts it", which is what every draft holds
+// until somebody moves one. Studio groups the unpinned ones itself — the lane
+// emails together on the next send day, a general email on a day of its own —
+// and a pinned draft simply overrules that for itself.
+//
+// Stored as a plain date rather than a position, because "the 20th" survives
+// other drafts being approved, sent or binned around it. A position would
+// quietly mean a different Tuesday every time the queue changed.
+try {
+  const cols = db.prepare(`PRAGMA table_info(keepwarm_drafts)`).all().map(c => c.name);
+  if (!cols.includes('send_on')) {
+    db.exec(`ALTER TABLE keepwarm_drafts ADD COLUMN send_on TEXT`);
+    console.log('[keepwarm] added send_on column');
+  }
+} catch (err) {
+  console.error('[keepwarm] send_on migration failed:', err.message);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings
 // ─────────────────────────────────────────────────────────────────────────────

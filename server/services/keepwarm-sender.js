@@ -222,16 +222,18 @@ export function lastCompletedRun() {
  */
 export function nextDueDate() {
   const { date } = londonNow();
-  const last = lastCompletedRun();
-  const from = last && (last.finished_at || last.created_at);
-
-  // If today is a send day and one has already gone out today, the next one is
-  // the one after — otherwise the screen would keep insisting today is due.
-  if (isSendDay(date) && from && from.slice(0, 10) === date) {
-    const d = new Date(date + 'T12:00:00Z');
-    d.setUTCDate(d.getUTCDate() + 1);
-    return nextSendDay(d.toISOString().slice(0, 10));
-  }
+  // A send day stays open once something has gone out on it.
+  //
+  // It used to roll forward the moment one email was sent, back when a send day
+  // meant one email. It now means one email PER TOPIC: the Website lane and the
+  // Microsoft 365 lane reach different people, so both can go out on the same
+  // Tuesday morning, and closing the day after the first would make the second
+  // wait a fortnight for no reason.
+  //
+  // Nobody is at risk of two emails from this. One email per person per
+  // fortnight is enforced on the server when each run is queued, whatever the
+  // calendar says.
+  if (isSendDay(date)) return date;
 
   return nextSendDay(date);
 }
@@ -736,7 +738,7 @@ export function schedule(limit = 10) {
   // arrows sort by. One definition, so an arrow cannot move a draft past a
   // neighbour the screen was not showing it next to.
   const approved = db.prepare(`
-    SELECT id, subject, created_at, approved_at, schedule_position, interest
+    SELECT id, subject, created_at, approved_at, schedule_position, interest, send_on
       FROM keepwarm_drafts
      WHERE status = 'approved'
      ORDER BY ${SCHEDULE_ORDER}
@@ -751,37 +753,99 @@ export function schedule(limit = 10) {
     Date.now(),
   );
 
-  // The first slot is the next send day; the ones behind it land on the send
-  // days after that, rather than on a rolling fortnight that would not fall on
-  // a Tuesday at all.
-  let cursor = new Date(startMs).toISOString().slice(0, 10);
-  const slotDates = approved.map((_, idx) => {
-    if (idx === 0) {
-      cursor = nextSendDay(cursor) || cursor;
-      return cursor;
-    }
-    const after = new Date(cursor + 'T12:00:00Z');
+  // WHICH DAY EACH EMAIL LANDS ON
+  //
+  // Several emails can share a send day now, because a lane email reaches only
+  // the people whose turn that topic is. Website and Microsoft 365 on the same
+  // Tuesday cannot reach the same person — the rotation decided that before
+  // either was written — so there is no reason to make them wait a fortnight
+  // for each other.
+  //
+  // A general email is different. It reaches everybody in the loop, so it
+  // overlaps every lane email there is, and it gets a day to itself.
+  //
+  // A draft pinned to a day by hand overrules all of this for itself. The
+  // grouping is a sensible default, not a rule, and the screen lets any email
+  // be moved to another Tuesday.
+  const firstDay = nextSendDay(new Date(startMs).toISOString().slice(0, 10))
+    || new Date(startMs).toISOString().slice(0, 10);
+
+  const dayAfter = (ymd) => {
+    const after = new Date(ymd + 'T12:00:00Z');
     after.setUTCDate(after.getUTCDate() + 1);
-    cursor = nextSendDay(after.toISOString().slice(0, 10)) || cursor;
-    return cursor;
+    return nextSendDay(after.toISOString().slice(0, 10)) || ymd;
+  };
+
+  // Days somebody has pinned an email to. An automatic general email will not
+  // be dropped onto one of these, because it would swallow whatever is there.
+  const pinnedDays = new Set(approved.map(d => d.send_on).filter(Boolean));
+
+  let laneDay = firstDay;
+  let generalDay = null;
+
+  const slotDates = approved.map((d) => {
+    // Pinned by hand. Never moved, even onto a day that already has a general
+    // email on it: the screen shows what that costs, and overruling somebody's
+    // explicit choice silently would be worse than letting them see it.
+    if (d.send_on) return d.send_on;
+
+    if (d.interest) {
+      // Lane emails stack up on the first free day, alongside each other.
+      while (generalDay === laneDay) laneDay = dayAfter(laneDay);
+      return laneDay;
+    }
+
+    // A general email: its own day, after everything already placed.
+    let day = generalDay ? dayAfter(generalDay) : laneDay;
+    if (!generalDay && day === laneDay) {
+      // The lanes are already sitting on this one.
+      const laneWaiting = approved.some(x => !x.send_on && x.interest);
+      if (laneWaiting) day = dayAfter(day);
+    }
+    while (pinnedDays.has(day)) day = dayAfter(day);
+    generalDay = day;
+    return day;
   });
 
   // Read once for the whole queue rather than per row.
   const alreadyEmailed = emailedThisFortnight();
 
+  // Everybody an earlier email on the SAME DAY would reach.
+  //
+  // Without this, a general email parked behind the lane emails would promise
+  // 317 people and deliver five, because the fortnight rule stops anybody
+  // getting two — and the person pressing Send would only find out afterwards.
+  // Counted here so the number on the screen is the number that goes out.
+  const claimedByDay = new Map();
+
   const slots = approved.map((d, idx) => {
-    const when = new Date(slotDates[idx] + 'T12:00:00Z');
+    const day = slotDates[idx];
+    const when = new Date(day + 'T12:00:00Z');
+
+    const claimed = claimedByDay.get(day) || new Set();
+    const reaches = whoFor(d, included, alreadyEmailed, claimed);
+    for (const e of reaches) claimed.add(e);
+    claimedByDay.set(day, claimed);
     return {
       draftId:        d.id,
       subject:        d.subject,
       date:           when.toISOString().slice(0, 10),
-      dueNow:         idx === 0 && (!due || Date.parse(due + 'T00:00:00Z') <= Date.now()),
+      // Sendable when its day has arrived — not only when it is top of the
+      // queue. Several emails can sit on one day now, and each is its own
+      // decision to press.
+      dueNow:         day <= londonNow().date,
       // A lane draft is counted against its own lane, minus anybody unticked
       // for it. Showing the whole loop's headcount next to a Microsoft 365
       // email would be the screen promising a send the server would refuse to
       // make.
       interest:       d.interest || null,
-      projectedCount: countFor(d, included, alreadyEmailed),
+      projectedCount: reaches.length,
+      // Pinned to this day by hand, rather than put there by the grouping.
+      pinned:         !!d.send_on,
+      // How many this email would have reached had it been on a day of its own.
+      // Shown next to the count when the two differ, so a small number on a big
+      // email explains itself instead of looking like people have gone missing.
+      countAlone:     countFor(d, included, alreadyEmailed),
       // Whether the arrows are pressable. Worked out here rather than in the
       // browser because the browser only ever sees `limit` rows — with more
       // approved drafts than that, the last row on screen is not the last row
@@ -809,8 +873,66 @@ export function schedule(limit = 10) {
     // instead of leaving it looking like people have gone missing.
     hadOneThisFortnight: alreadyEmailed.size,
     slots,
+    // The Tuesdays an email can be moved to, for the day picker on each row.
+    // Worked out here because the calendar rule lives here; the screen should
+    // not be doing date arithmetic of its own and getting a different answer.
+    sendDays: (() => {
+      const out = [];
+      let d = firstDay;
+      for (let i = 0; i < 6; i += 1) {
+        out.push(d);
+        d = dayAfter(d);
+      }
+      return out;
+    })(),
     config: cadenceConfig(),
   };
+}
+
+/**
+ * Pin an approved draft to a send day, or let the queue place it again.
+ *
+ * Refuses a day that is not a send day and a day in the past, rather than
+ * quietly rounding to the nearest one: "it went out on a Wednesday" is not
+ * something to discover afterwards.
+ */
+export function setDraftSendDay(draftId, ymd) {
+  const row = db.prepare(`SELECT id, status FROM keepwarm_drafts WHERE id = ?`).get(String(draftId || ''));
+  if (!row) return { error: 'That email is not in the queue any more.' };
+  if (row.status !== 'approved') return { error: 'Only an approved email can be given a day.' };
+
+  const day = String(ymd || '').trim();
+
+  // Empty puts it back under the queue's own grouping.
+  if (!day) {
+    db.prepare(`UPDATE keepwarm_drafts SET send_on = NULL WHERE id = ?`).run(row.id);
+    return { id: row.id, sendOn: null };
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { error: 'That is not a date Studio understands.' };
+  if (!isSendDay(day)) return { error: `${day} is not a send day. ${sendDayLabel()}.` };
+  if (day < londonNow().date) return { error: 'That day has already been and gone.' };
+
+  db.prepare(`UPDATE keepwarm_drafts SET send_on = ? WHERE id = ?`).run(day, row.id);
+  return { id: row.id, sendOn: day };
+}
+
+/**
+ * Who one approved draft would actually reach, as the queue stands.
+ *
+ * `claimed` is everybody an earlier email on the same day already takes. The
+ * server applies the same rule at send time, so this is a projection of what
+ * will happen rather than a separate opinion about it.
+ */
+function whoFor(draft, included, already, claimed) {
+  let pool = laneOf(included, draft.interest);
+  if (already && already.size) pool = pool.filter(p => !already.has(normEmail(p.email)));
+  if (claimed && claimed.size) pool = pool.filter(p => !claimed.has(normEmail(p.email)));
+  if (draft.interest) {
+    const skipped = draftSkips(draft.id);
+    if (skipped.size) pool = pool.filter(p => !skipped.has(normEmail(p.email)));
+  }
+  return pool.map(p => normEmail(p.email));
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   updateDraft,
   setDraftStatus,
   moveDraftInSchedule,
+  setDraftSendDay,
   addManualToLoop,
   removeManual,
   removeAllManual,
@@ -1119,6 +1120,27 @@ router.post('/drafts/:id/schedule-move', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[keepwarm] schedule move failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /drafts/:id/send-day  { date }
+ *
+ * Move one approved email onto a particular Tuesday, or send an empty date to
+ * put it back under the queue's own grouping.
+ *
+ * Grouping is what Studio does by default — lane emails together on the next
+ * send day, a general email on a day of its own — and this is how that default
+ * gets overruled for one email.
+ */
+router.put('/drafts/:id/send-day', (req, res) => {
+  try {
+    const result = setDraftSendDay(req.params.id, (req.body || {}).date || '');
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] set send day failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
