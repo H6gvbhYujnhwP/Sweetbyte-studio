@@ -51,7 +51,18 @@ import { signatureImages } from './email-signature.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FROM_EMAIL = process.env.SERVICE_EMAIL_FROM || 'billy@sweetbyte.co.uk';
-const CC_EMAIL   = process.env.SERVICE_EMAIL_CC   || 'westley@sweetbyte.co.uk';
+
+// Nobody is copied in unless somebody asks for it.
+//
+// This used to fall back to a colleague's address, so every introduction email
+// ever sent landed in his inbox whether or not he needed it — hundreds of them,
+// with nothing to switch it off short of a code change. The mechanism is kept,
+// because copying somebody in is a reasonable thing to want, but it is now off
+// until SERVICE_EMAIL_CC names an address.
+//
+// An empty or whitespace-only value counts as nobody, so clearing the setting
+// works the way anybody would expect rather than quietly restoring a default.
+const CC_EMAIL = (process.env.SERVICE_EMAIL_CC || '').trim() || null;
 
 // KEEP THIS ASCII. buildRawEmail() RFC 2047-encodes the Subject but writes the
 // From display name raw, so a non-ASCII character here (an em dash, a curly
@@ -618,10 +629,16 @@ export async function processDue() {
         inline: true,
       });
 
-      // No open/click tracking on these, on purpose. Every message is CC'd, so
-      // a tracking pixel would fire from the CC's client and record an "open"
-      // the prospect never made — worse than no data. The unsubscribe link is
-      // a plain URL and needs no tracking wrapper to work.
+      // No open/click tracking on these, on purpose. These go to people who
+      // have never heard from Sweetbyte before and have to land in an inbox; a
+      // tracking pixel is one of the things filters weigh against a message.
+      // The unsubscribe link is a plain URL and needs no tracking wrapper.
+      //
+      // There was a second reason, which no longer applies: while every message
+      // was copied to a colleague, a pixel fired from HIS client and recorded
+      // an "open" the prospect never made. With the copy off by default that
+      // particular trap is gone — but switching SERVICE_EMAIL_CC back on would
+      // bring it straight back, so the two go together.
       const { messageId } = await sendEmail({
         to:        row.to_email,
         toName:    row.contact_name || null,

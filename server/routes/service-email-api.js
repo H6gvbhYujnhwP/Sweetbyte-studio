@@ -29,7 +29,8 @@
  *                                    and from WORKTRACKR_BRIDGE_SECRET.
  *   SERVICE_EMAIL_FROM               default billy@sweetbyte.co.uk
  *   SERVICE_EMAIL_FROM_NAME          default "Billy — Sweetbyte"
- *   SERVICE_EMAIL_CC                 default westley@sweetbyte.co.uk
+ *   SERVICE_EMAIL_CC                 optional — nobody is copied in unless this
+ *                                    names an address
  *   SERVICE_EMAIL_UNDO_SECONDS       default 10
  *   SERVICE_EMAIL_FOLLOWUP_DAYS      default 7
  *   SWEETBYTE_EMAIL_CLIENT_ID        optional — mirrors opt-outs into the
