@@ -266,7 +266,7 @@ function eveEmail(st) {
     ? P(`Tomorrow is a keep-warm send day. You have ${st.approvedCount} approved and ready to go, top of the queue being "${st.topSubject}".`)
       + P('Nothing to do tonight. You will get another note in the morning.')
     : P('Tomorrow is a keep-warm send day and there is nothing approved.')
-      + P('If you want one to go out, it needs writing and approving before then. Open the Drafts tab, generate a few, and approve the one you like.');
+      + P('If you want one to go out, it needs writing and approving before then. Open Keep-warm, go to the Emails tab, write a few in step 1, and approve the one you like in step 2.');
 
   return {
     subject,
@@ -282,7 +282,7 @@ function dayEmail(st) {
 
   const body = ready
     ? P(`Today is a keep-warm send day. "${st.topSubject}" is top of the schedule and ready.`)
-      + P('Open Studio, go to Keep-warm, then the Schedule tab, and press Send. You have ten seconds to undo afterwards.')
+      + P('Open Studio, go to Keep-warm, then the Emails tab, and press Send on each email in step 3. You have ten seconds to undo afterwards.')
     : P('Today is a keep-warm send day and nothing is approved, so nothing will go unless you write one.')
       + P('If today is a write-off, the next send day is the one after this — no harm done.');
 

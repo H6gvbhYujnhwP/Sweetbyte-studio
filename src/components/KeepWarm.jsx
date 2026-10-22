@@ -19,7 +19,7 @@
 // and remounts it — and the subject box loses focus after every character
 // typed. This has bitten the WorkTrackr panel before; do not move these.
 // ─────────────────────────────────────────────────────────────────────────────
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SB } from '../brand.js';
 import KeepWarmLanes from './KeepWarmLanes.jsx';
 
@@ -62,10 +62,6 @@ function fmtDate(d) {
   if (isNaN(x)) return d;
   return x.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
-function teaser(html, len = 150) {
-  const t = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  return t.length > len ? t.slice(0, len) + '…' : t;
-}
 
 // ── Module-level sub-components ──────────────────────────────────────────────
 
@@ -93,6 +89,7 @@ function Button({ children, onClick, tone = 'plain', disabled, style }) {
     plain:   { bg: CARD,       fg: TEXT,          bd: BORDER },
     primary: { bg: SB.primary, fg: SB.onPrimary,  bd: SB.primary },
     danger:  { bg: CARD,       fg: DANGER,        bd: '#e9c9c9' },
+    ghost:   { bg: 'transparent', fg: MUTED,      bd: 'transparent' },
   };
   const t = tones[tone] || tones.plain;
   return (
@@ -780,7 +777,7 @@ function SendDayBanner({ r }) {
       <>
         <strong>Send day.</strong>{' '}
         {r.approvedCount > 0
-          ? <>“{r.topSubject}” is approved and top of the queue. {r.audienceCount} people are in the loop — open the Schedule tab and press Send.</>
+          ? <>“{r.topSubject}” is approved and top of the queue. {r.audienceCount} people are in the loop — open the Emails tab and press Send in step 3.</>
           : <>Nothing is approved, so nothing will go out. Generate a few below and approve one.</>}
       </>
     ));
@@ -829,54 +826,6 @@ const LANE_LABELS = {
 
 function laneLabel(key) {
   return LANE_LABELS[key] || key;
-}
-
-function DraftCard({ draft, onOpen, onStatus, busy }) {
-  return (
-    <div style={{
-      background: CARD,
-      border: `1px solid ${draft.status === 'approved' ? SB.primary : BORDER}`,
-      borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-        <Pill status={draft.status} />
-        {/* Which service lane this one belongs to, if any. Nine lane drafts sit
-            side by side here on a send day and their subject lines are not
-            always enough to tell them apart at a glance. A draft with no badge
-            is a general email, which is every draft the 3/6/9 generator wrote. */}
-        {draft.interest ? (
-          <span style={{
-            fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
-            color: SB.dark, background: SB.tint, borderRadius: 999, padding: '3px 9px',
-          }}>
-            {laneLabel(draft.interest)}
-          </span>
-        ) : null}
-        {draft.edited ? <span style={{ fontSize: 12, color: TERTIARY }}>edited</span> : null}
-      </div>
-      {draft.angle ? (
-        <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 5 }}>{draft.angle}</div>
-      ) : null}
-      <div style={{ fontSize: 14, fontWeight: 600, color: TEXT, lineHeight: 1.4, marginBottom: 8 }}>
-        {draft.subject}
-      </div>
-      <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.6, flex: 1, marginBottom: 12 }}>
-        {teaser(draft.html_body)}
-      </div>
-      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-        <Button onClick={() => onOpen(draft.id)}>Read it</Button>
-        {draft.status !== 'approved' && (
-          <Button tone="primary" disabled={busy} onClick={() => onStatus(draft.id, 'approved')}>Approve</Button>
-        )}
-        {draft.status === 'approved' && (
-          <Button disabled={busy} onClick={() => onStatus(draft.id, 'draft')}>Un-approve</Button>
-        )}
-        {draft.status !== 'rejected' && (
-          <Button tone="danger" disabled={busy} onClick={() => onStatus(draft.id, 'rejected')}>Bin</Button>
-        )}
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -1019,7 +968,7 @@ function ReadPanel({
 }
 
 /**
- * The Schedule tab's Read view. An approved email exactly as one real person on
+ * The Read view, opened from any email on the Emails tab. An email exactly as one real person on
  * its list will receive it: From, To, subject, then the whole message —
  * greeting with their name, bullets, example websites, signature, opt-out line
  * and disclaimer — built by the server with the same call the real send uses.
@@ -1106,13 +1055,29 @@ function WhoGetsIt({ people, selected, switching, onPick }) {
   );
 }
 
-function ReadCopyPanel({ state, onClose, onEdit, onPick }) {
+function ReadCopyPanel({
+  state, onClose, onEdit, onPick, onApprove, onBin, onRestore, busy,
+  testTo, onTestTo, onTest, testBusy, testNote, testError,
+}) {
   if (!state) return null;
   const { slot, copy, loading, error, switching } = state;
+
+  // Status comes from the server once the copy arrives; until then, from
+  // whichever column the email was opened from.
+  const status = copy ? copy.status : (slot.status || 'approved');
 
   const who = (p) => p.name ? `${p.name} <${p.email}>` : p.email;
   const headLabel = { fontSize: 12, color: MUTED, width: 64, flexShrink: 0 };
   const headRow   = { display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0', fontSize: 13, color: TEXT, minWidth: 0 };
+
+  const whenLine =
+    status === 'approved' && slot.date
+      ? `Goes out ${fmtDate(slot.date)} · ${slot.projectedCount} ${slot.projectedCount === 1 ? 'person' : 'people'}`
+    : status === 'approved' ? 'Approved'
+    : status === 'draft'    ? `Waiting for you to review${copy ? ` · ${copy.listSize} on its list today` : ''}`
+    : status === 'rejected' ? 'In the bin. It will never send.'
+    : status === 'sent'     ? 'Already sent'
+    : '';
 
   return (
     <div
@@ -1131,10 +1096,8 @@ function ReadCopyPanel({ state, onClose, onEdit, onPick }) {
           display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px',
           background: CARD, borderBottom: `1px solid ${BORDER}`, flexWrap: 'wrap',
         }}>
-          <Pill status="approved" />
-          <div style={{ flex: 1, fontSize: 13, color: MUTED, minWidth: 200 }}>
-            Goes out {fmtDate(slot.date)} · {slot.projectedCount} {slot.projectedCount === 1 ? 'person' : 'people'}
-          </div>
+          <Pill status={status} />
+          <div style={{ flex: 1, fontSize: 13, color: MUTED, minWidth: 200 }}>{whenLine}</div>
           <Button onClick={onClose}>Close</Button>
         </div>
 
@@ -1192,12 +1155,46 @@ function ReadCopyPanel({ state, onClose, onEdit, onPick }) {
               dangerouslySetInnerHTML={{ __html: copy.html }}
             />
 
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Button onClick={() => onEdit(copy.draftId)}>Change it in Drafts</Button>
-              <span style={{ fontSize: 12, color: TERTIARY, flex: 1, minWidth: 220, lineHeight: 1.5 }}>
-                Saving a change there un-approves it and takes it off this schedule until you approve it again.
-              </span>
-            </div>
+            {/* What you can do with it depends on where it is. */}
+            {status === 'draft' && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button tone="primary" disabled={busy} onClick={() => onApprove(copy.draftId)}>Approve</Button>
+                <Button disabled={busy} onClick={() => onEdit(copy.draftId)}>Edit</Button>
+                <Button tone="ghost" disabled={busy} onClick={() => onBin(copy.draftId)}>Bin</Button>
+              </div>
+            )}
+
+            {status === 'approved' && (<>
+              {testError && <Banner tone="bad">{testError}</Banner>}
+              {testNote && <Banner tone="good">{testNote}</Banner>}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  value={testTo}
+                  onChange={(e) => onTestTo(e.target.value)}
+                  placeholder="you@sweetbyte.co.uk"
+                  aria-label="Address for a test copy"
+                  style={{
+                    minWidth: 230, padding: '7px 11px', fontSize: 13,
+                    border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', background: CARD,
+                  }}
+                />
+                <Button disabled={testBusy || !testTo.trim()} onClick={() => onTest(copy.draftId)}>
+                  {testBusy ? 'Sending…' : 'Send me a test'}
+                </Button>
+                <Button tone="ghost" onClick={() => onEdit(copy.draftId)}>Change it</Button>
+              </div>
+              <div style={{ fontSize: 12, color: TERTIARY, marginTop: 8, lineHeight: 1.5 }}>
+                A test arrives with [TEST] in front of the subject and doesn't use the email up.
+                Changing the wording un-approves it until you approve it again.
+              </div>
+            </>)}
+
+            {status === 'rejected' && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button disabled={busy} onClick={() => onRestore(copy.draftId)}>Restore</Button>
+                <span style={{ fontSize: 12, color: TERTIARY }}>Puts it back in step 2 to review again.</span>
+              </div>
+            )}
           </>)}
         </div>
       </div>
@@ -1215,7 +1212,7 @@ function sendReason(d) {
     case 'not_configured':
       return 'No from-address is set, so nothing was sent. SERVICE_EMAIL_FROM and SERVICE_EMAIL_FROM_NAME need filling in on Render.';
     case 'not_approved':
-      return 'That draft has not been approved yet. Approve it on the Drafts tab first.';
+      return 'That draft has not been approved yet. Approve it in step 2 first.';
     case 'already_sent':
       return 'That draft has already gone out once.';
     case 'run_in_progress':
@@ -1272,12 +1269,12 @@ function GreetingPill({ greeting }) {
 
 const TABS = [
   { key: 'audience', label: 'Audience' },
-  { key: 'drafts',   label: 'Drafts' },
-  { key: 'schedule', label: 'Schedule' },
+  { key: 'emails',   label: 'Emails' },
   { key: 'sent',     label: 'Sent' },
 ];
 
-function TabBar({ tab, onPick }) {
+// `badges` is { tabKey: number } — the Emails tab shows how many need you.
+function TabBar({ tab, onPick, badges = {} }) {
   return (
     <div style={{ display: 'flex', gap: 22, borderBottom: `1px solid ${BORDER}`, marginBottom: 22 }}>
       {TABS.map(t => (
@@ -1292,6 +1289,12 @@ function TabBar({ tab, onPick }) {
           }}
         >
           {t.label}
+          {badges[t.key] > 0 && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, background: SB.primary, color: SB.onPrimary,
+              borderRadius: 8, padding: '1px 6px', marginLeft: 6, verticalAlign: 1,
+            }}>{badges[t.key]}</span>
+          )}
         </button>
       ))}
     </div>
@@ -1323,394 +1326,443 @@ function UndoBar({ secondsLeft, count, onUndo, undoing }) {
   );
 }
 
-// ── Schedule ─────────────────────────────────────────────────────────────────
+// ── Emails tab: Write → Review → Send ────────────────────────────────────────
+//
+// Drafts and Schedule used to be two tabs. They are one now, laid out in the
+// order the work actually happens: step 1 writes, step 2 is a column of emails
+// waiting to be read and approved, step 3 is a column of approved emails
+// grouped by the Tuesday they go out, and a short Sent column shows the last
+// few that went. Whichever column needs you is drawn in blue.
+//
+// Nothing about sending changed. The Send button, the confirm, the ten-second
+// undo, the one-run-at-a-time rule and the lane narrowing are exactly what the
+// Schedule tab did — this is the same buttons in a different arrangement.
+//
+// Every piece is module level, per the SUB-COMPONENT RULE at the top.
 
-function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, onRemove, busy, sendDays, onSetDay, onRead }) {
+const SMALL = { padding: '4px 9px', fontSize: 12 };
+
+function StepNum({ n, tone = 'idle' }) {
+  const map = {
+    need: [SB.primary, SB.onPrimary],
+    done: [GOOD_BG, GOOD],
+    idle: ['#e6e6e2', MUTED],
+  };
+  const [bg, fg] = map[tone] || map.idle;
+  return (
+    <span style={{
+      width: 24, height: 24, borderRadius: '50%', display: 'inline-grid', placeItems: 'center',
+      fontSize: 12, fontWeight: 700, background: bg, color: fg, flexShrink: 0,
+    }}>{n}</span>
+  );
+}
+
+function LaneTag({ interest }) {
+  return (
+    <span style={{
+      fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+      color: interest ? SB.dark : MUTED, background: interest ? SB.tint : '#f2f2ee',
+      borderRadius: 999, padding: '2px 8px', whiteSpace: 'nowrap',
+    }}>
+      {interest ? laneLabel(interest) : 'General'}
+    </span>
+  );
+}
+
+function Column({ n, tone, title, note, need, children }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      padding: '11px 14px', borderBottom: `1px solid ${BORDER}`,
+      background: need ? SB.tint : '#efefec',
+      border: `2px solid ${need ? SB.primary : 'transparent'}`,
+      borderRadius: 10, padding: 10, minWidth: 0,
     }}>
-      {/* Which Tuesday this one goes out on. Studio groups them itself — the
-          lane emails together, a general email on its own day — and this is how
-          that gets overruled for one email without touching the others. */}
-      <select
-        value={slot.date}
-        disabled={busy}
-        onChange={e => onSetDay(slot.draftId, e.target.value)}
-        aria-label="Which day this email goes out"
-        style={{
-          width: 116, fontSize: 13, color: slot.pinned ? TEXT : MUTED, fontFamily: 'inherit',
-          background: CARD, border: `1px solid ${slot.pinned ? SB.light : BORDER}`,
-          borderRadius: 7, padding: '5px 7px', cursor: busy ? 'default' : 'pointer',
-        }}
-      >
-        {(sendDays || []).concat((sendDays || []).includes(slot.date) ? [] : [slot.date])
-          .sort()
-          .map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
-      </select>
-      {/* Which email this row actually is. On a send day there may be nine of
-          these queued together — websites, business internet, general IT,
-          domains and so on — and the subject lines alone are not enough to tell
-          at a glance which is which, or that each one is going to its own small
-          list rather than to everybody in the loop. */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {slot.subject}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4, flexWrap: 'wrap' }}>
-          <span style={{
-            fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
-            color: slot.interest ? SB.dark : MUTED,
-            background: slot.interest ? SB.tint : '#f2f2ee',
-            borderRadius: 999, padding: '2px 9px', whiteSpace: 'nowrap',
-          }}>
-            {slot.interest ? laneLabel(slot.interest) : 'General'}
-          </span>
-          <span style={{ fontSize: 12, color: TERTIARY }}>
-            {slot.interest === '__none'
-              ? 'Only the people with nothing ticked'
-              : slot.interest
-                ? `Only the ${slot.projectedCount} ticked for ${laneLabel(slot.interest)}`
-                : 'Everybody in the loop'}
-          </span>
-          {/* An email sharing a day with an earlier one reaches fewer people,
-              because nobody gets two in a fortnight. Said here rather than left
-              for afterwards: pressing Send on "317 people" and watching five go
-              out is the thing this line exists to prevent. */}
-          {typeof slot.countAlone === 'number' && slot.countAlone > slot.projectedCount && (
-            <span style={{ fontSize: 12, color: '#854F0B', background: '#FBF3E4', borderRadius: 999, padding: '2px 9px' }}>
-              {slot.countAlone - slot.projectedCount} already get an earlier email that day
-            </span>
-          )}
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '2px 2px 4px' }}>
+        <StepNum n={n} tone={need ? 'need' : tone} />
+        <span style={{ fontSize: 14, fontWeight: 700, color: TEXT }}>{title}</span>
       </div>
-      <span style={{
-        fontSize: 12, background: GOOD_BG, color: GOOD,
-        padding: '3px 10px', borderRadius: 999, whiteSpace: 'nowrap',
-      }}>Approved</span>
+      <div style={{
+        fontSize: 12, margin: '0 2px 10px', lineHeight: 1.4,
+        color: need ? SB.dark : MUTED, fontWeight: need ? 600 : 400,
+      }}>{note}</div>
+      {children}
+    </div>
+  );
+}
 
-      {/* Read the email again, exactly as a recipient gets it. Read only, and
-          never locked while a send is in flight: looking changes nothing. */}
-      <button
-        onClick={() => onRead(slot)}
-        title="Read this email exactly as it will arrive"
-        style={{
-          fontSize: 13, fontWeight: 600, color: SB.dark, background: SB.tint,
-          border: '1px solid #c6e6f2', borderRadius: 7, padding: '4px 12px',
-          cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
-        }}
-      >Read</button>
+function Tile({ children, faded = false }) {
+  return (
+    <div style={{
+      background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8,
+      padding: 10, marginBottom: 8, opacity: faded ? 0.75 : 1,
+    }}>{children}</div>
+  );
+}
 
-      {/* The headcount is the control on the sendable row — clicking the number
-          you are about to commit to is where you would reach to check it.
-          Later rows show the same number as plain text: their real audience is
-          a fortnight away and genuinely unknowable, so offering a list there
-          would be showing today's names as though they were next time's. */}
-      {/* The list behind this number is the whole loop, which is the right
-          list for a general email and the wrong one for a lane email: the lane
-          reaches only the people whose turn that topic is, and its real list —
-          with the ticks — lives on the lane's own card. So a lane row shows its
-          headcount as plain text rather than offering a list that would be
-          somebody else's. */}
-      {canSend && !slot.interest ? (
-        <button
-          onClick={onToggle}
+function TileSubject({ children, struck = false }) {
+  return (
+    <div style={{
+      fontSize: 13, fontWeight: 600, lineHeight: 1.35, margin: '6px 0 4px',
+      color: struck ? MUTED : TEXT, textDecoration: struck ? 'line-through' : 'none',
+      overflowWrap: 'anywhere',
+    }}>{children}</div>
+  );
+}
+
+function TileActions({ children }) {
+  return (
+    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', marginTop: 8, position: 'relative' }}>
+      {children}
+    </div>
+  );
+}
+
+function EmptyNote({ children }) {
+  return (
+    <div style={{
+      fontSize: 12.5, color: MUTED, textAlign: 'center', padding: '16px 8px',
+      border: '1px dashed #d6d6d0', borderRadius: 8, lineHeight: 1.5,
+    }}>{children}</div>
+  );
+}
+
+// Step 1. One line, with your own subject lines folded away underneath until
+// you want them. Lines that have already gone out are hidden — they are kept
+// on the server so the same subject can never be sent twice, but there is no
+// reason to look at them. Lines sitting in a draft stay, greyed.
+function WriteStep({
+  count, counts, onCount, onGenerate, generating, canGenerate,
+  ideas, picked, onToggleIdea, onBinIdea, ideaBusy, ideaText, onIdeaText, onAddIdeas,
+}) {
+  const [foldOpen, setFoldOpen] = useState(false);
+  const live = ideas.filter(i => i.state !== 'sent');
+  const sentHidden = ideas.length - live.length;
+  const unused = ideas.filter(i => i.usable).length;
+
+  return (
+    <div style={{
+      background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10,
+      padding: '12px 14px', marginBottom: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginRight: 'auto' }}>
+          <StepNum n={1} />
+          <span style={{ fontSize: 15, fontWeight: 700, color: TEXT }}>Write</span>
+        </div>
+        <select
+          value={count}
+          onChange={(e) => onCount(Number(e.target.value))}
+          aria-label="How many emails to write"
           style={{
-            width: 108, textAlign: 'right', fontSize: 13, color: SB.dark,
-            background: 'none', border: 'none', cursor: 'pointer',
-            fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+            padding: '6px 9px', fontSize: 13, border: `1px solid ${BORDER}`,
+            borderRadius: 7, fontFamily: 'inherit', background: CARD,
           }}
         >
-          {slot.projectedCount} people {expanded ? '▴' : '▾'}
-        </button>
-      ) : (
-        <div style={{ width: 108, textAlign: 'right', fontSize: 13, color: MUTED, whiteSpace: 'nowrap' }}>
-          {slot.projectedCount} people
+          {counts.map(n => <option key={n} value={n}>{n} emails</option>)}
+        </select>
+        <Button tone="primary" onClick={onGenerate} disabled={generating || !canGenerate}>
+          {generating ? 'Writing…' : 'Write new emails'}
+        </Button>
+      </div>
+
+      {generating && (
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
+          This takes up to a minute for nine. Leave the page open — they appear in step 2.
         </div>
       )}
-
-      {/* Reordering and removing. Both are disabled while anything is in flight:
-          the dates come from a row's position in this list, so moving a draft
-          while a send is being queued would change which email the row about to
-          go actually is. */}
-      <div style={{ display: 'flex', gap: 3 }}>
-        <ArrowButton
-          label="Move up"
-          glyph="▲"
-          disabled={busy || !slot.canMoveUp}
-          onClick={() => onMove(slot.draftId, 'up')}
-        />
-        <ArrowButton
-          label="Move down"
-          glyph="▼"
-          disabled={busy || !slot.canMoveDown}
-          onClick={() => onMove(slot.draftId, 'down')}
-        />
-      </div>
+      {!generating && picked.length > 0 && (
+        <div style={{ fontSize: 12, marginTop: 8, color: picked.length > count ? DANGER : TERTIARY }}>
+          {picked.length > count
+            ? `${picked.length} lines ticked but only ${count} emails asked for — untick ${picked.length - count}, or ask for more.`
+            : `${picked.length} from your lines, ${count - picked.length} from Studio's own ideas.`}
+        </div>
+      )}
 
       <button
-        onClick={() => onRemove(slot)}
-        disabled={busy}
-        title="Send this back to Drafts, un-approved"
+        onClick={() => setFoldOpen(v => !v)}
         style={{
-          fontSize: 13, color: busy ? TERTIARY : DANGER, background: 'none', border: 'none',
-          cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap',
+          background: 'none', border: 'none', padding: 0, marginTop: 10, cursor: 'pointer',
+          fontFamily: 'inherit', fontSize: 13, color: SB.strong,
         }}
       >
-        Remove
+        {foldOpen ? '▾' : '▸'} Use my own subject lines{' '}
+        <span style={{ color: TERTIARY }}>
+          {unused} unused{picked.length ? ` · ${picked.length} ticked` : ''}
+        </span>
       </button>
 
-      <div style={{ width: 96, textAlign: 'right' }}>
-        {canSend
-          ? <Button tone="primary" disabled={sending} onClick={() => onSend(slot)}>
-              {sending ? 'Queuing…' : 'Send'}
-            </Button>
-          : <span style={{ fontSize: 12, color: TERTIARY }}>Queued</span>}
-      </div>
-    </div>
-  );
-}
-
-// A small square arrow. Its own component only so the disabled styling and the
-// accessible label are written once rather than twice.
-function ArrowButton({ label, glyph, disabled, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={label}
-      aria-label={label}
-      style={{
-        width: 24, height: 24, padding: 0, fontSize: 9, lineHeight: 1,
-        fontFamily: 'inherit', background: 'transparent',
-        border: `1px solid ${BORDER}`, borderRadius: 6,
-        color: disabled ? TERTIARY : MUTED,
-        opacity: disabled ? 0.4 : 1,
-        cursor: disabled ? 'default' : 'pointer',
-      }}
-    >
-      {glyph}
-    </button>
-  );
-}
-
-// The people the next send would go to, read live rather than stored — this is
-// the same audience endpoint the Audience tab uses, so the two can never drift
-// into disagreeing about who is on the list.
-function SlotList({ data, search, onSearch, isChecked, onToggle, onAll, onNone, selectedCount }) {
-  return (
-    <div style={{ background: BG, borderBottom: `1px solid ${BORDER}` }}>
-      <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input
-          value={search}
-          onChange={(e) => onSearch(e.target.value)}
-          placeholder="Search name, company or address"
-          style={{
-            flex: 1, minWidth: 200, padding: '7px 11px', fontSize: 13,
-            border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', background: CARD,
-          }}
-        />
-        <Button onClick={onAll}>Select all</Button>
-        <Button onClick={onNone}>Deselect all</Button>
-        <span style={{ fontSize: 12, color: TERTIARY }}>
-          {data ? `${selectedCount} ticked · ${data.total} shown of ${data.includedCount}` : 'Loading…'}
-        </span>
-      </div>
-
-      <div style={{ maxHeight: 320, overflowY: 'auto', borderTop: `1px solid ${BORDER}` }}>
-        {!data && <div style={{ padding: '12px 14px', fontSize: 13, color: MUTED }}>Loading…</div>}
-        {data && data.rows.length === 0 && (
-          <div style={{ padding: '12px 14px', fontSize: 13, color: MUTED }}>Nobody matches that search.</div>
-        )}
-        {data && data.rows.map((r, i) => (
-          <div key={i} style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '7px 14px', borderBottom: `1px solid ${BORDER}`,
-          }}>
-            <input
-              type="checkbox"
-              checked={isChecked(r.email)}
-              onChange={() => onToggle(r.email)}
-              aria-label={`Include ${r.email}`}
-              style={{ width: 15, height: 15, cursor: 'pointer', accentColor: SB.primary, flexShrink: 0 }}
-            />
-            <div style={{ flex: 1, minWidth: 0, opacity: isChecked(r.email) ? 1 : 0.45 }}>
-              <div style={{ fontSize: 13, color: TEXT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {r.contactName ? `${r.contactName} — ` : ''}{r.companyName || 'Unknown company'}
-              </div>
-              <div style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {r.email}
-              </div>
-            </div>
-            <GreetingPill greeting={r.greeting} />
-            <span style={{
-              fontSize: 12, color: SB.dark, background: SB.tint,
-              padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap',
-            }}>{r.stageLabel}</span>
+      {foldOpen && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, lineHeight: 1.5 }}>
+            Tick a line and Studio writes an email around it, word for word.
           </div>
-        ))}
-      </div>
-
-      {data && data.truncated && (
-        <div style={{ padding: '9px 14px', fontSize: 12, color: TERTIARY }}>
-          Only the first 1,000 are listed. Search to narrow it down — the send still goes to all {data.includedCount}.
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch,
-                       isChecked, onToggleOne, onAll, onNone, selectedCount, handPicked,
-                       testTo, onTestTo, onTest, testBusy, testNote, testError,
-                       onMove, onRemove, slotBusy, slotError, onSetDay, openSlotId, onRead }) {
-  if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
-
-  const active = data.activeRun;
-  const running = active && active.status === 'sending';
-
-  return (
-    <>
-      {sendError && <Banner tone="bad">{sendError}</Banner>}
-      {slotError && <Banner tone="bad">{slotError}</Banner>}
-
-      {running && (
-        <Card>
-          <div style={{ fontSize: 16, fontWeight: 700, color: TEXT, marginBottom: 4 }}>Sending now</div>
-          <div style={{ fontSize: 14, color: TEXT, marginBottom: 10 }}>{active.subject}</div>
-          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
-            {active.progress.sent} of {active.progress.total} sent
-            {active.progress.suppressed > 0 && `, ${active.progress.suppressed} skipped as unsubscribed`}
-            {active.progress.failed > 0 && `, ${active.progress.failed} failed`}.
-            {' '}A thousand takes a couple of minutes. You can leave this page — it carries on without you.
-          </div>
-        </Card>
-      )}
-
-      <Card>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0 }}>Next {data.slots.length || ''} sends</h2>
-          <div style={{ fontSize: 13, color: MUTED }}>
-            {data.config.calendarLabel || `Every ${data.config.cadenceDays} days`}
-            {data.nextDueDate ? ` · next due ${fmtDate(data.nextDueDate)}` : ' · nothing sent yet, so the first is due whenever you are'}
-          </div>
-        </div>
-      </Card>
-
-      {handPicked && (
-        <Banner tone="warn">
-          You have hand-picked {selectedCount} of {data.audienceCount} for the next send.
-          Everyone else stays in the loop for future ones. The ticks clear as soon as this send goes.
-        </Banner>
-      )}
-
-      {data.slots.length === 0 ? (
-        <Card><div style={{ fontSize: 14, color: MUTED }}>
-          Nothing approved yet. Approve a draft on the Drafts tab and it will line up here.
-        </div></Card>
-      ) : (
-        <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
-          {data.slots.map((s, i) => {
-            // Sendable when its own day has arrived. It used to be the top row
-            // only, from when a send day meant one email; several lane emails
-            // can now share a Tuesday and each is its own decision to press.
-            //
-            // Still one at a time. Two runs overlapping would land two emails on
-            // the same person within minutes, which reads as a fault whatever
-            // the copy says.
-            const sendable = s.dueNow && !active;
-            const firstOfDay = i === 0 || data.slots[i - 1].date !== s.date;
-            const sameDay = data.slots.filter(x => x.date === s.date);
-            return (
-              <div key={s.draftId}>
-                {firstOfDay && (
-                  <div style={{
-                    display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12,
-                    padding: '9px 14px', background: '#fafaf8',
-                    borderBottom: `1px solid ${BORDER}`, borderTop: i === 0 ? 'none' : `1px solid ${BORDER}`,
-                  }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{fmtDate(s.date)}</span>
-                    <span style={{ fontSize: 12, color: MUTED }}>
-                      {sameDay.length} {sameDay.length === 1 ? 'email' : 'emails'}
-                      {' · '}
-                      {sameDay.reduce((acc, x) => acc + x.projectedCount, 0)} people
-                      {sameDay.length > 1 && ' · nobody gets two'}
-                    </span>
-                  </div>
-                )}
-                <SlotRow
-                  slot={s}
-                  sendDays={data.sendDays || []}
-                  onSetDay={onSetDay}
-                  canSend={sendable}
-                  onSend={onSend}
-                  sending={sending}
-                  expanded={sendable && !s.interest && listOpen && openSlotId === s.draftId}
-                  onToggle={() => onToggleList(s.draftId)}
-                  onMove={onMove}
-                  onRemove={onRemove}
-                  onRead={onRead}
-                  // Reordering and removing are locked while a run is in
-                  // flight, and while one is being queued or moved. The slot
-                  // dates come from position in this list, so a change
-                  // half-way through queueing a send would move the goalposts
-                  // after the decision was made.
-                  busy={Boolean(active) || slotBusy}
+          {live.length > 0 && (
+            <div style={{
+              border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden',
+              maxHeight: 260, overflowY: 'auto', marginBottom: 8,
+            }}>
+              {live.map(i => (
+                <SubjectIdeaRow
+                  key={i.id}
+                  idea={i}
+                  checked={picked.includes(i.id)}
+                  onToggle={onToggleIdea}
+                  onDelete={onBinIdea}
+                  busy={ideaBusy || generating}
                 />
-                {sendable && !s.interest && listOpen && openSlotId === s.draftId && (
-                  <SlotList
-                    data={listData}
-                    search={listSearch}
-                    onSearch={onListSearch}
-                    isChecked={isChecked}
-                    onToggle={onToggleOne}
-                    onAll={onAll}
-                    onNone={onNone}
-                    selectedCount={selectedCount}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {data.slots.length > 0 && !active && (
-        <Card>
-          <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>Send yourself a test</h2>
-          <p style={{ fontSize: 13, color: MUTED, margin: '0 0 12px', lineHeight: 1.6 }}>
-            One copy of <strong>{data.slots[0].subject}</strong> to any address, exactly as it would go out.
-            It does not use the draft up — the real send still goes to everybody afterwards.
-            The subject arrives prefixed [TEST] so you cannot mix it up later.
-          </p>
-
-          {testError && <Banner tone="bad">{testError}</Banner>}
-          {testNote && <Banner tone="good">{testNote}</Banner>}
-
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              value={testTo}
-              onChange={(e) => onTestTo(e.target.value)}
-              placeholder="you@sweetbyte.co.uk"
+              ))}
+            </div>
+          )}
+          {sentHidden > 0 && (
+            <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 8 }}>
+              {sentHidden} already sent, hidden. {sentHidden === 1 ? 'It' : 'They'} can't be used again.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <textarea
+              value={ideaText}
+              onChange={(e) => onIdeaText(e.target.value)}
+              placeholder="Add a subject line — or paste several, one per line"
+              rows={ideaText.includes('\n') ? 4 : 1}
               style={{
-                minWidth: 260, padding: '7px 11px', fontSize: 13,
-                border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', background: CARD,
+                flex: 1, minWidth: 220, boxSizing: 'border-box', padding: '7px 10px', fontSize: 13,
+                border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', resize: 'vertical',
               }}
             />
-            <Button tone="primary" disabled={testBusy || !testTo.trim()} onClick={() => onTest(data.slots[0].draftId)}>
-              {testBusy ? 'Sending…' : 'Send a test'}
+            <Button onClick={onAddIdeas} disabled={ideaBusy || !ideaText.trim()}>
+              {ideaBusy ? 'Saving…' : 'Add'}
             </Button>
           </div>
-        </Card>
+        </div>
       )}
+    </div>
+  );
+}
 
-      <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.6, paddingBottom: 40 }}>
-        The headcount is who qualifies today. The real list is fixed at the moment you press send,
-        because stages keep moving in WorkTrackr. Dates after the first are a projection —
-        nothing goes out on its own, you press the button each time.
-      </div>
-    </>
+// Step 2. Every draft not yet approved. The bin sits under a small link at the
+// bottom so binned emails are out of the way but can still be brought back.
+function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin, onRestore, onEmptyBin, emptying }) {
+  const [showBin, setShowBin] = useState(false);
+  const note = waiting.length
+    ? `${waiting.length} waiting for you. Read, then approve or bin.`
+    : 'All caught up.';
+
+  return (
+    <Column n={2} title="Review" note={note} need={need}>
+      {waiting.length === 0 && <EmptyNote>Nothing to review. Write some new emails in step 1.</EmptyNote>}
+      {waiting.map(d => (
+        <Tile key={d.id}>
+          <LaneTag interest={d.interest} />
+          <TileSubject>{d.subject}</TileSubject>
+          {d.edited ? <div style={{ fontSize: 11.5, color: TERTIARY }}>edited</div> : null}
+          <TileActions>
+            <Button style={SMALL} onClick={() => onRead(d)}>Read</Button>
+            <Button style={SMALL} tone="primary" disabled={busyId === d.id} onClick={() => onApprove(d.id)}>Approve</Button>
+            <Button style={SMALL} tone="ghost" disabled={busyId === d.id} onClick={() => onBin(d.id)}>Bin</Button>
+          </TileActions>
+        </Tile>
+      ))}
+
+      {binned.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <button
+            onClick={() => setShowBin(v => !v)}
+            style={{
+              background: 'none', border: 'none', padding: '4px 2px', cursor: 'pointer',
+              fontFamily: 'inherit', fontSize: 12, color: MUTED, textDecoration: 'underline',
+            }}
+          >
+            {showBin ? 'Hide the bin' : `Bin (${binned.length})`}
+          </button>
+          {showBin && (
+            <div style={{ marginTop: 6 }}>
+              {binned.map(d => (
+                <Tile key={d.id} faded>
+                  <TileSubject struck>{d.subject}</TileSubject>
+                  <TileActions>
+                    <Button style={SMALL} onClick={() => onRead(d)}>Read</Button>
+                    <Button style={SMALL} tone="ghost" disabled={busyId === d.id} onClick={() => onRestore(d.id)}>Restore</Button>
+                  </TileActions>
+                </Tile>
+              ))}
+              <div style={{ fontSize: 12, color: TERTIARY, margin: '2px 2px 8px', lineHeight: 1.5 }}>
+                Binned emails never send. Emptying the bin clears them for good, but Studio still
+                remembers the subject lines so it does not write the same ideas again.
+              </div>
+              <Button style={SMALL} tone="danger" disabled={emptying} onClick={onEmptyBin}>
+                {emptying ? 'Emptying…' : 'Empty the bin'}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </Column>
+  );
+}
+
+// The ⋯ menu on a Send tile: change the day, move up or down, take it off the
+// schedule. Tucked away because they are occasional; Read and Send are the two
+// buttons pressed every fortnight.
+function SlotMenu({ slot, sendDays, busy, onSetDay, onMove, onRemove }) {
+  const [openMenu, setOpenMenu] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpenMenu(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [openMenu]);
+
+  const item = (danger, disabled) => ({
+    display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+    padding: '7px 10px', fontSize: 13, borderRadius: 5, fontFamily: 'inherit',
+    cursor: disabled ? 'default' : 'pointer',
+    color: disabled ? TERTIARY : (danger ? DANGER : TEXT),
+  });
+
+  const days = (sendDays || []).concat((sendDays || []).includes(slot.date) ? [] : [slot.date]).sort();
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <Button style={SMALL} tone="ghost" onClick={() => setOpenMenu(v => !v)} disabled={busy}>⋯</Button>
+      {openMenu && (
+        <div style={{
+          position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 5, minWidth: 210,
+          background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 4,
+          boxShadow: '0 8px 24px rgba(15,29,63,0.14)',
+        }}>
+          <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 13, color: TEXT }}>
+            Send on
+            <select
+              value={slot.date}
+              disabled={busy}
+              onChange={(e) => { setOpenMenu(false); onSetDay(slot.draftId, e.target.value); }}
+              style={{ fontSize: 13, fontFamily: 'inherit', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '4px 6px', background: CARD }}
+            >
+              {days.map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
+            </select>
+          </label>
+          <button style={item(false, busy || !slot.canMoveUp)} disabled={busy || !slot.canMoveUp}
+                  onClick={() => { setOpenMenu(false); onMove(slot.draftId, 'up'); }}>Move up</button>
+          <button style={item(false, busy || !slot.canMoveDown)} disabled={busy || !slot.canMoveDown}
+                  onClick={() => { setOpenMenu(false); onMove(slot.draftId, 'down'); }}>Move down</button>
+          <button style={item(true, busy)} disabled={busy}
+                  onClick={() => { setOpenMenu(false); onRemove(slot); }}>Take off the schedule</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Step 3. Approved emails, grouped by the Tuesday they go out. Send lights up
+// on the day. The headcount on the general email links to the Audience tab's
+// tick list, which is the one list that decides who a general send reaches.
+function SendColumn({
+  data, need, sending, onRead, onSend, onSetDay, onMove, onRemove, slotBusy,
+  handPicked, selectedCount, onHandPick,
+}) {
+  if (!data) {
+    return <Column n={3} title="Send" note="Loading…" need={false}><div /></Column>;
+  }
+  const active = data.activeRun;
+  const slots = data.slots || [];
+  const due = slots.filter(s => s.dueNow);
+  const note = (need && due.length)
+    ? `Send day. ${due.length} to send today — press Send on each.`
+    : 'Approved and lined up. Press Send on the day. Nothing goes on its own.';
+
+  return (
+    <Column n={3} title="Send" note={note} need={need}>
+      {slots.length === 0 && <EmptyNote>Nothing approved yet. Approve an email in step 2 and it lines up here.</EmptyNote>}
+      {slots.map((s, i) => {
+        const firstOfDay = i === 0 || slots[i - 1].date !== s.date;
+        const sameDay = slots.filter(x => x.date === s.date);
+        const sendable = s.dueNow && !active;
+        const lane = s.interest;
+        const reach = (!lane && handPicked && sendable) ? selectedCount : s.projectedCount;
+        return (
+          <React.Fragment key={s.draftId}>
+            {firstOfDay && (
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', gap: 6, flexWrap: 'wrap',
+                fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+                color: s.dueNow ? GOOD : MUTED, margin: i === 0 ? '0 2px 6px' : '12px 2px 6px',
+              }}>
+                <span>{s.dueNow ? 'Today · ' : ''}{fmtDate(s.date)}</span>
+                <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: TERTIARY }}>
+                  {sameDay.length} {sameDay.length === 1 ? 'email' : 'emails'}
+                  {sameDay.length > 1 ? ' · nobody gets two' : ''}
+                </span>
+              </div>
+            )}
+            <Tile>
+              <LaneTag interest={lane} />
+              <TileSubject>{s.subject}</TileSubject>
+              <div style={{ fontSize: 11.5, color: TERTIARY, lineHeight: 1.45 }}>
+                {lane
+                  ? <>Only the {s.projectedCount} ticked for {laneLabel(lane)}</>
+                  : sendable
+                    ? (
+                      <button
+                        onClick={onHandPick}
+                        title="Choose exactly who gets it, on the Audience tab"
+                        style={{
+                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                          fontFamily: 'inherit', fontSize: 11.5, color: SB.strong, textDecoration: 'underline',
+                        }}
+                      >
+                        {reach} {reach === 1 ? 'person' : 'people'}{handPicked ? ' (hand-picked)' : ''}
+                      </button>
+                    )
+                    : <>{s.projectedCount} {s.projectedCount === 1 ? 'person' : 'people'} · everybody in the loop</>}
+                {typeof s.countAlone === 'number' && s.countAlone > s.projectedCount && (
+                  <span style={{ color: AMBER }}> · {s.countAlone - s.projectedCount} already get an earlier email that day</span>
+                )}
+              </div>
+              <TileActions>
+                <Button style={SMALL} onClick={() => onRead(s)}>Read</Button>
+                <Button
+                  style={SMALL}
+                  tone={sendable ? 'primary' : 'plain'}
+                  disabled={!sendable || sending}
+                  onClick={() => onSend(s)}
+                >
+                  {sending && sendable ? 'Queuing…' : 'Send'}
+                </Button>
+                <SlotMenu
+                  slot={s}
+                  sendDays={data.sendDays || []}
+                  busy={Boolean(active) || slotBusy}
+                  onSetDay={onSetDay}
+                  onMove={onMove}
+                  onRemove={onRemove}
+                />
+              </TileActions>
+            </Tile>
+          </React.Fragment>
+        );
+      })}
+    </Column>
+  );
+}
+
+// The last few that went. The full history, with who each one reached, stays
+// on the Sent tab.
+function SentColumn({ runs }) {
+  const real = (runs || []).filter(r => r.status === 'sent').slice(0, 3);
+  return (
+    <Column n="✓" tone="done" title="Sent" note="The last 3. The full history is on the Sent tab." need={false}>
+      {runs === null && <EmptyNote>Loading…</EmptyNote>}
+      {runs !== null && real.length === 0 && <EmptyNote>Nothing sent yet.</EmptyNote>}
+      {real.map(r => (
+        <Tile key={r.id}>
+          <TileSubject>{r.subject}</TileSubject>
+          <div style={{ fontSize: 11.5, color: TERTIARY }}>
+            Sent {fmt(r.sentAt)} · {r.sent} {r.sent === 1 ? 'person' : 'people'}
+          </div>
+        </Tile>
+      ))}
+    </Column>
   );
 }
 
@@ -1826,7 +1878,8 @@ function SentView({ runs, openId, onOpen, recipients }) {
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function KeepWarm() {
-  const [tab, setTab]             = useState('audience');
+  // Opens on Emails: it is where the fortnightly work happens.
+  const [tab, setTab]             = useState('emails');
   const [readCopy, setReadCopy]   = useState(null);
   // Which service-interest lane is selected, or null for all of them. Held
   // here rather than inside the cards because the audience list below has to
@@ -1854,7 +1907,6 @@ export default function KeepWarm() {
   const [genNote, setGenNote]     = useState(null);
 
   const [drafts, setDrafts]       = useState([]);
-  const [filter, setFilter]       = useState('all');
   const [busyId, setBusyId]       = useState(null);
 
   const [open, setOpen]           = useState(null);
@@ -1881,23 +1933,14 @@ export default function KeepWarm() {
   const [openRun, setOpenRun]       = useState(null);
   const [runRows, setRunRows]       = useState(null);
 
-  // The "39 people" drop-down on the sendable row. Kept separate from the
-  // Audience tab's own list state so opening one does not disturb the search
-  // you had typed on the other.
-  const [listOpen, setListOpen]     = useState(false);
-  // Which row's list is open. More than one email can be sendable on the same
-  // day now, so "the list" has to say whose.
-  const [openSlotId, setOpenSlotId] = useState(null);
-  const [listData, setListData]     = useState(null);
-  const [listSearch, setListSearch] = useState('');
   // How many people carry a topic set here rather than in WorkTrackr. Held up
   // here so the drawer's heading can show it while the drawer is shut.
   const [handSetCount, setHandSetCount] = useState(0);
 
   // Who the next send goes to.
   //
-  // ONE selection, edited from two screens — the Audience tab and the Schedule
-  // drop-down are two windows onto the same ticks, not two independent lists.
+  // ONE selection, edited from two screens — the Audience tab's list and the
+  // general email's Send button are two windows onto the same ticks, not two independent lists.
   // Two lists would eventually disagree about who is getting an email, and the
   // one that lost would lose silently.
   //
@@ -2006,7 +2049,8 @@ export default function KeepWarm() {
 
   const loadSchedule = useCallback(async () => {
     try {
-      const r = await fetch('/api/keepwarm/schedule');
+      // Every approved email, not just the next few: the Send column shows them all.
+      const r = await fetch('/api/keepwarm/schedule?limit=50');
       const d = await r.json();
       if (r.ok) setSchedule(d);
     } catch { /* leave the previous view on screen rather than blanking it */ }
@@ -2025,22 +2069,22 @@ export default function KeepWarm() {
   // Load a tab's data when you land on it, so switching back after a send shows
   // the new state rather than a stale one.
   useEffect(() => {
-    if (tab === 'schedule') loadSchedule();
+    if (tab === 'emails') { loadSchedule(); loadIdeas(); loadSent(); }
     if (tab === 'sent') loadSent();
-    if (tab === 'drafts') loadIdeas();
   }, [tab, loadSchedule, loadSent, loadIdeas]);
 
   // While a run is queued or sending, refresh every few seconds. Stops as soon
   // as the run finishes — no point polling an idle screen forever.
   useEffect(() => {
     const active = schedule && schedule.activeRun;
-    if (tab !== 'schedule' || !active) return;
+    if (tab !== 'emails' || !active) return;
     const t = setInterval(() => {
       loadSchedule();
       loadDrafts();
+      loadSent();
     }, 3000);
     return () => clearInterval(t);
-  }, [tab, schedule, loadSchedule, loadDrafts]);
+  }, [tab, schedule, loadSchedule, loadDrafts, loadSent]);
 
   // The undo countdown. Driven off the run's own send_after rather than a local
   // timer started when the button was pressed, so a page refresh mid-window
@@ -2053,28 +2097,6 @@ export default function KeepWarm() {
     tick();
     const t = setInterval(tick, 500);
     return () => clearInterval(t);
-  }, [schedule]);
-
-  // Same debounce as the Audience tab's search — 250ms, so typing a company
-  // name is one request at the end rather than one per keystroke.
-  useEffect(() => {
-    if (!listOpen) return;
-    const t = setTimeout(async () => {
-      try {
-        const r = await fetch(`/api/keepwarm/audience?show=included&q=${encodeURIComponent(listSearch || '')}`);
-        const d = await r.json();
-        if (r.ok) setListData(d);
-      } catch { /* leave what is on screen */ }
-    }, 250);
-    return () => clearTimeout(t);
-  }, [listOpen, listSearch]);
-
-  // Collapse the drop-down once a send is under way. The list it was showing
-  // was a projection; the moment you press send the real list is frozen, and
-  // leaving the projection open beside a running send invites reading it as
-  // the thing that actually went.
-  useEffect(() => {
-    if (schedule && schedule.activeRun) setListOpen(false);
   }, [schedule]);
 
   // Move one approved email onto a different Tuesday. Studio groups them
@@ -2301,7 +2323,7 @@ export default function KeepWarm() {
   async function removeSlot(slot) {
     if (!window.confirm(
       `Remove "${slot.subject}" from the schedule?\n\n`
-      + 'It goes back to the Drafts tab un-approved, and everything behind it '
+      + 'It goes back to step 2 (Review) un-approved, and everything behind it '
       + 'moves up a slot. You can approve it again whenever you like.',
     )) return;
 
@@ -2341,7 +2363,6 @@ export default function KeepWarm() {
         throw new Error(d.error || 'Could not empty the bin');
       }
       await loadDrafts();
-      setFilter('all');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2561,7 +2582,6 @@ export default function KeepWarm() {
       // The ticks clear because those lines are now spoken for by a draft. They
       // are not used up yet — bin the draft and the line comes back.
       setPicked([]);
-      setFilter('draft');
       await loadDrafts();
       await loadIdeas();
     } catch (err) {
@@ -2581,7 +2601,10 @@ export default function KeepWarm() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not update');
+      // Approving or un-approving moves an email between the Review and Send
+      // columns, so both lists are reloaded.
       await loadDrafts();
+      await loadSchedule();
       if (open && open.draft.id === id) setOpen(o => ({ ...o, draft: d.draft }));
     } catch (err) {
       setError(err.message);
@@ -2590,14 +2613,18 @@ export default function KeepWarm() {
     }
   }
 
-  // Schedule tab → Read. The slot is kept so the header can say when it goes
-  // and to how many; the copy itself comes from the server.
+  // Read, from any email on the Emails tab. `slot` is a Send-column slot (so
+  // the header can say when it goes and to how many) or a plain draft from the
+  // Review column or the bin, carrying its id and status. The copy itself
+  // always comes from the server.
   // With an email address it switches to that person's copy and leaves the
   // email on screen while the new one loads, so the list does not jump about.
   async function openReadCopy(slot, email = null) {
     if (email) {
       setReadCopy(s => s ? { ...s, switching: email, error: null } : s);
     } else {
+      setTestNote(null);
+      setTestError(null);
       setReadCopy({ slot, copy: null, loading: true, switching: null, error: null });
     }
     try {
@@ -2609,6 +2636,13 @@ export default function KeepWarm() {
     } catch (err) {
       setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, loading: false, switching: null, error: err.message } : s);
     }
+  }
+
+  // The buttons inside the Read view. Each changes the email's status and
+  // closes the view, so the board underneath shows where it went.
+  async function statusFromRead(id, status) {
+    await setStatus(id, status);
+    setReadCopy(null);
   }
 
   async function openDraft(id) {
@@ -2710,13 +2744,16 @@ export default function KeepWarm() {
     }
   }
 
-  // "All" now means everything still in play. Binned ideas are deliberately not
-  // in it — the point of binning one is not to look at it again.
-  const shown = drafts.filter(d => (
-    filter === 'all' ? d.status !== 'rejected' : d.status === filter
-  ));
-  const binCount = drafts.filter(d => d.status === 'rejected').length;
   const cfg = overview?.config || {};
+
+  // The board's columns, and which one needs you. Send wins on a send day,
+  // because that is the job with a clock on it.
+  const reviewDrafts = drafts.filter(d => d.status === 'draft');
+  const binnedDrafts = drafts.filter(d => d.status === 'rejected');
+  const dueSlots = (schedule && !schedule.activeRun) ? (schedule.slots || []).filter(s => s.dueNow) : [];
+  const sendNeedsYou = dueSlots.length > 0;
+  const reviewNeedsYou = !sendNeedsYou && reviewDrafts.length > 0;
+  const emailsBadge = sendNeedsYou ? dueSlots.length : reviewDrafts.length;
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', background: BG, padding: '28px 32px' }}>
@@ -2733,10 +2770,10 @@ export default function KeepWarm() {
           selected={lane}
           onSelect={setLane}
           onOpenDraft={openDraft}
-          onDraftsChanged={() => { loadDrafts(); loadOverview(); }}
+          onDraftsChanged={() => { loadDrafts(); loadOverview(); loadSchedule(); }}
         />
 
-        <TabBar tab={tab} onPick={setTab} />
+        <TabBar tab={tab} onPick={setTab} badges={{ emails: emailsBadge }} />
 
         {error && <Banner tone="bad">{error}</Banner>}
 
@@ -2943,7 +2980,7 @@ export default function KeepWarm() {
                  can be done on it. */
               <Card style={{ padding: 0, overflow: 'hidden' }}>
                 <Fold title="Add one person" note="search for their company">
-                  <AddOnePersonCard bare onAdded={() => { loadManual(); loadAudience(listMode, listSearch); }} />
+                  <AddOnePersonCard bare onAdded={() => { loadManual(); loadAudience(listMode, search); }} />
                 </Fold>
                 <Fold title="Add a list of addresses" note="paste, one per line" last={handSetCount === 0}>
                   <AddByHandCard
@@ -2970,139 +3007,8 @@ export default function KeepWarm() {
               </Card>
             )}
 
-            {tab === 'drafts' && (<>
-            {/* ── Generate ─────────────────────────────────────────────── */}
-            <Card>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: '0 0 4px' }}>Write some emails</h2>
-              <p style={{ fontSize: 13, color: MUTED, margin: '0 0 14px', lineHeight: 1.6 }}>
-                Each one is a complete, separate email with its own subject line and its own angle —
-                these are alternatives to choose between, not a sequence. Anything you have already
-                approved, sent or binned is fed back in so the same idea does not come round again.
-              </p>
-
-              {genError && <Banner tone="bad">{genError}</Banner>}
-              {genNote && <Banner tone="warn">{genNote}</Banner>}
-
-              {/* ── The operator's own subject lines ────────────────────── */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>Your subject lines</span>
-                  <span style={{ fontSize: 12, color: TERTIARY }}>
-                    {ideas.filter(i => i.usable).length} unused
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, lineHeight: 1.5 }}>
-                  Tick a line to have an email written around it, word for word. Leave them all
-                  unticked and Studio invents its own, as before.
-                </div>
-
-                {ideas.length > 0 && (
-                  <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden',
-                                maxHeight: 260, overflowY: 'auto', marginBottom: 10 }}>
-                    {ideas.map(i => (
-                      <SubjectIdeaRow
-                        key={i.id}
-                        idea={i}
-                        checked={pickedIdeas.includes(i.id)}
-                        onToggle={toggleIdea}
-                        onDelete={binIdea}
-                        busy={ideaBusy || generating}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                <textarea
-                  value={ideaText}
-                  onChange={(e) => setIdeaText(e.target.value)}
-                  placeholder="Add a subject line — or paste several, one per line"
-                  rows={ideaText.includes('\n') ? 5 : 2}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', padding: '9px 11px', fontSize: 13,
-                    border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit',
-                    resize: 'vertical', marginBottom: 8,
-                  }}
-                />
-                <Button onClick={addIdeaLines} disabled={ideaBusy || !ideaText.trim()}>
-                  {ideaBusy ? 'Saving…' : 'Add'}
-                </Button>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <select
-                  value={count}
-                  onChange={(e) => setCount(Number(e.target.value))}
-                  style={{
-                    padding: '7px 11px', fontSize: 13, border: `1px solid ${BORDER}`,
-                    borderRadius: 7, fontFamily: 'inherit', background: CARD,
-                  }}
-                >
-                  {(overview.allowedCounts || [3, 6, 9]).map(n => (
-                    <option key={n} value={n}>{n} emails</option>
-                  ))}
-                </select>
-                <Button tone="primary" onClick={generate} disabled={generating || !cfg.ragLoaded || !cfg.anthropicConfigured}>
-                  {generating ? 'Writing…' : 'Generate'}
-                </Button>
-                {generating && (
-                  <span style={{ fontSize: 13, color: MUTED }}>
-                    This takes up to a minute for nine. Leave the page open.
-                  </span>
-                )}
-                {!generating && pickedIdeas.length > 0 && (
-                  <span style={{ fontSize: 12, color: pickedIdeas.length > count ? DANGER : TERTIARY }}>
-                    {pickedIdeas.length > count
-                      ? `${pickedIdeas.length} lines ticked but only ${count} emails asked for — untick ${pickedIdeas.length - count}, or ask for more.`
-                      : `${pickedIdeas.length} from your lines, ${count - pickedIdeas.length} from Studio's own ideas.`}
-                  </span>
-                )}
-              </div>
-            </Card>
-
-            {/* ── Drafts ───────────────────────────────────────────────── */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px', flexWrap: 'wrap' }}>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: TEXT, margin: 0, marginRight: 6 }}>Drafts</h2>
-              {['all', 'draft', 'approved', 'rejected'].map(f => (
-                <Button key={f} tone={filter === f ? 'primary' : 'plain'} onClick={() => setFilter(f)}>
-                  {f === 'all' ? 'All' : f === 'rejected' ? `Bin${binCount ? ` (${binCount})` : ''}` : STATUS_STYLE[f].label}
-                </Button>
-              ))}
-
-              {filter === 'rejected' && binCount > 0 && (
-                <Button tone="danger" disabled={emptying} onClick={emptyTheBin}>
-                  {emptying ? 'Emptying…' : `Delete all ${binCount}`}
-                </Button>
-              )}
-            </div>
-
-            {filter === 'rejected' && (
-              <div style={{ fontSize: 12, color: TERTIARY, margin: '-4px 0 12px', lineHeight: 1.6 }}>
-                Binned emails are out of the way and will never be sent. Emptying the bin clears them
-                from here for good, but Studio still remembers the subject lines so the generator does
-                not write the same ideas again.
-              </div>
-            )}
-
-            {shown.length === 0 ? (
-              <Card><div style={{ fontSize: 14, color: MUTED }}>
-                Nothing here yet. Pick a number above and press Generate.
-              </div></Card>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14, paddingBottom: 40 }}>
-                {shown.map(d => (
-                  <DraftCard
-                    key={d.id}
-                    draft={d}
-                    busy={busyId === d.id}
-                    onOpen={openDraft}
-                    onStatus={setStatus}
-                  />
-                ))}
-              </div>
-            )}
-            </>)}
-
-            {tab === 'schedule' && (<>
+            {tab === 'emails' && (<>
+              {/* ── Sending in progress ────────────────────────────────── */}
               {schedule && schedule.activeRun && schedule.activeRun.status === 'queued' && (
                 <UndoBar
                   secondsLeft={secondsLeft}
@@ -3111,40 +3017,86 @@ export default function KeepWarm() {
                   undoing={undoing}
                 />
               )}
-              <ScheduleView
-                data={schedule}
-                onSend={sendSlot}
-                sending={sending}
-                sendError={sendError}
-                listOpen={listOpen}
-                openSlotId={openSlotId}
-                onToggleList={(draftId) => {
-                  if (openSlotId === draftId && listOpen) { setListOpen(false); return; }
-                  setOpenSlotId(draftId);
-                  setListOpen(true);
-                }}
-                onSetDay={setSlotDay}
-                listData={listData}
-                listSearch={listSearch}
-                onListSearch={setListSearch}
-                isChecked={isChecked}
-                onToggleOne={toggleOne}
-                onAll={selectAll}
-                onNone={selectNone}
-                selectedCount={selectedCount}
-                handPicked={handPicked}
-                testTo={testTo}
-                onTestTo={setTestTo}
-                onTest={sendTestEmail}
-                testBusy={testBusy}
-                testNote={testNote}
-                testError={testError}
-                onMove={moveSlot}
-                onRemove={removeSlot}
-                slotBusy={slotBusy}
-                slotError={slotError}
-                onRead={openReadCopy}
+              {schedule && schedule.activeRun && schedule.activeRun.status === 'sending' && (
+                <Card>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: TEXT, marginBottom: 4 }}>Sending now</div>
+                  <div style={{ fontSize: 14, color: TEXT, marginBottom: 10 }}>{schedule.activeRun.subject}</div>
+                  <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.6 }}>
+                    {schedule.activeRun.progress.sent} of {schedule.activeRun.progress.total} sent
+                    {schedule.activeRun.progress.suppressed > 0 && `, ${schedule.activeRun.progress.suppressed} skipped as unsubscribed`}
+                    {schedule.activeRun.progress.failed > 0 && `, ${schedule.activeRun.progress.failed} failed`}.
+                    {' '}A thousand takes a couple of minutes. You can leave this page — it carries on without you.
+                  </div>
+                </Card>
+              )}
+
+              {sendError && <Banner tone="bad">{sendError}</Banner>}
+              {slotError && <Banner tone="bad">{slotError}</Banner>}
+              {genError && <Banner tone="bad">{genError}</Banner>}
+              {genNote && <Banner tone="warn">{genNote}</Banner>}
+              {handPicked && (
+                <Banner tone="warn">
+                  You have hand-picked {selectedCount} of {audienceTotal} on the Audience tab for the
+                  next general email. The ticks clear as soon as it goes.
+                </Banner>
+              )}
+
+              {/* ── Step 1 ─────────────────────────────────────────────── */}
+              <WriteStep
+                count={count}
+                counts={overview.allowedCounts || [3, 6, 9]}
+                onCount={setCount}
+                onGenerate={generate}
+                generating={generating}
+                canGenerate={Boolean(cfg.ragLoaded && cfg.anthropicConfigured)}
+                ideas={ideas}
+                picked={pickedIdeas}
+                onToggleIdea={toggleIdea}
+                onBinIdea={binIdea}
+                ideaBusy={ideaBusy}
+                ideaText={ideaText}
+                onIdeaText={setIdeaText}
+                onAddIdeas={addIdeaLines}
               />
+
+              {/* ── Steps 2 and 3, and what went last ──────────────────── */}
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))',
+                gap: 12, alignItems: 'start',
+              }}>
+                <ReviewColumn
+                  waiting={reviewDrafts}
+                  binned={binnedDrafts}
+                  need={reviewNeedsYou}
+                  busyId={busyId}
+                  onRead={(d) => openReadCopy({ draftId: d.id, status: d.status })}
+                  onApprove={(id) => setStatus(id, 'approved')}
+                  onBin={(id) => setStatus(id, 'rejected')}
+                  onRestore={(id) => setStatus(id, 'draft')}
+                  onEmptyBin={emptyTheBin}
+                  emptying={emptying}
+                />
+                <SendColumn
+                  data={schedule}
+                  need={sendNeedsYou}
+                  sending={sending}
+                  onRead={(slot) => openReadCopy({ ...slot, status: 'approved' })}
+                  onSend={sendSlot}
+                  onSetDay={setSlotDay}
+                  onMove={moveSlot}
+                  onRemove={removeSlot}
+                  slotBusy={slotBusy}
+                  handPicked={handPicked}
+                  selectedCount={selectedCount}
+                  onHandPick={() => { setTab('audience'); setListMode('included'); setShowList(true); }}
+                />
+                <SentColumn runs={sentList} />
+              </div>
+
+              <div style={{ fontSize: 12, color: TERTIARY, lineHeight: 1.6, padding: '14px 0 40px' }}>
+                Nothing goes out on its own — you press Send each time. Headcounts are who qualifies
+                today; the real list is fixed the moment you press Send, because stages keep moving in WorkTrackr.
+              </div>
             </>)}
 
             {tab === 'sent' && (
@@ -3162,8 +3114,18 @@ export default function KeepWarm() {
       <ReadCopyPanel
         state={readCopy}
         onClose={() => setReadCopy(null)}
-        onEdit={(id) => { setReadCopy(null); setTab('drafts'); openDraft(id); }}
+        onEdit={(id) => { setReadCopy(null); openDraft(id); }}
         onPick={(email) => readCopy && openReadCopy(readCopy.slot, email)}
+        onApprove={(id) => statusFromRead(id, 'approved')}
+        onBin={(id) => statusFromRead(id, 'rejected')}
+        onRestore={(id) => statusFromRead(id, 'draft')}
+        busy={Boolean(readCopy && busyId && readCopy.slot.draftId === busyId)}
+        testTo={testTo}
+        onTestTo={setTestTo}
+        onTest={sendTestEmail}
+        testBusy={testBusy}
+        testNote={testNote}
+        testError={testError}
       />
 
       <ReadPanel
