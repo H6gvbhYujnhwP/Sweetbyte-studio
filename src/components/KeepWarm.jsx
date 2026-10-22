@@ -1018,6 +1018,107 @@ function ReadPanel({
   );
 }
 
+/**
+ * The Schedule tab's Read view. An approved email exactly as one real person on
+ * its list will receive it: From, To, subject, then the whole message —
+ * greeting with their name, bullets, example websites, signature, opt-out line
+ * and disclaimer — built by the server with the same call the real send uses.
+ *
+ * Deliberately read only. Editing an approved email clears its approval and
+ * takes it off the schedule, which is not something to do by accident while
+ * just looking. "Change it in Drafts" opens the normal editing view instead.
+ */
+function ReadCopyPanel({ state, onClose, onEdit }) {
+  if (!state) return null;
+  const { slot, copy, loading, error } = state;
+
+  const who = (p) => p.name ? `${p.name} <${p.email}>` : p.email;
+  const headLabel = { fontSize: 12, color: MUTED, width: 64, flexShrink: 0 };
+  const headRow   = { display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0', fontSize: 13, color: TEXT, minWidth: 0 };
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15,29,63,0.45)', zIndex: 50,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 16px',
+        overflowY: 'auto',
+      }}
+    >
+      <div style={{
+        background: BG, borderRadius: 12, width: '100%', maxWidth: 860,
+        border: `1px solid ${BORDER}`, overflow: 'hidden',
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px',
+          background: CARD, borderBottom: `1px solid ${BORDER}`, flexWrap: 'wrap',
+        }}>
+          <Pill status="approved" />
+          <div style={{ flex: 1, fontSize: 13, color: MUTED, minWidth: 200 }}>
+            Goes out {fmtDate(slot.date)} · {slot.projectedCount} {slot.projectedCount === 1 ? 'person' : 'people'}
+          </div>
+          <Button onClick={onClose}>Close</Button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          {loading && <div style={{ fontSize: 14, color: MUTED }}>Loading the email…</div>}
+          {error && <Banner tone="bad">{error}</Banner>}
+
+          {copy && (<>
+            {/* Inbox-style header — what sits above the email in Outlook. */}
+            <div style={{
+              background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8,
+              padding: '10px 14px', marginBottom: 10,
+            }}>
+              <div style={headRow}>
+                <span style={headLabel}>From</span>
+                <span style={{ overflowWrap: 'anywhere' }}>
+                  {copy.from ? who(copy.from) : <span style={{ color: DANGER }}>No from-address set on Render</span>}
+                </span>
+              </div>
+              <div style={headRow}>
+                <span style={headLabel}>To</span>
+                <span style={{ overflowWrap: 'anywhere' }}>
+                  {copy.to
+                    ? <>{who(copy.to)}{copy.to.company && <span style={{ color: MUTED }}> · {copy.to.company}</span>}</>
+                    : <span style={{ color: MUTED }}>Nobody on this email's list right now</span>}
+                </span>
+              </div>
+              <div style={{ ...headRow, borderTop: `1px solid ${BORDER}`, marginTop: 6, paddingTop: 8 }}>
+                <span style={headLabel}>Subject</span>
+                <span style={{ fontSize: 15, fontWeight: 700, overflowWrap: 'anywhere' }}>{copy.subject}</span>
+              </div>
+            </div>
+
+            <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 10, lineHeight: 1.5 }}>
+              {copy.to
+                ? <>This is {copy.to.name || copy.to.email}'s copy. Everyone else's is the same apart from the name after “Hi”.</>
+                : <>Nobody is on this email's list at the moment, so it is shown with “Hi there”.</>}
+              {' '}The unsubscribe link is switched off here so it cannot be clicked by mistake.
+            </div>
+
+            {/* The email itself, full length — no inner scroll box. */}
+            <div
+              style={{
+                background: '#ffffff', border: `1px solid ${BORDER}`, borderRadius: 8,
+                padding: '22px 24px', marginBottom: 16, overflowX: 'auto',
+              }}
+              dangerouslySetInnerHTML={{ __html: copy.html }}
+            />
+
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button onClick={() => onEdit(copy.draftId)}>Change it in Drafts</Button>
+              <span style={{ fontSize: 12, color: TERTIARY, flex: 1, minWidth: 220, lineHeight: 1.5 }}>
+                Saving a change there un-approves it and takes it off this schedule until you approve it again.
+              </span>
+            </div>
+          </>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // The send route refuses in six named ways. Each one is a decision for the
 // operator rather than a fault to retry, so each gets a sentence saying what to
 // do about it — a bare "not_configured" on screen is a support call.
@@ -1138,7 +1239,7 @@ function UndoBar({ secondsLeft, count, onUndo, undoing }) {
 
 // ── Schedule ─────────────────────────────────────────────────────────────────
 
-function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, onRemove, busy, sendDays, onSetDay }) {
+function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, onRemove, busy, sendDays, onSetDay, onRead }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -1202,6 +1303,18 @@ function SlotRow({ slot, canSend, onSend, sending, expanded, onToggle, onMove, o
         fontSize: 12, background: GOOD_BG, color: GOOD,
         padding: '3px 10px', borderRadius: 999, whiteSpace: 'nowrap',
       }}>Approved</span>
+
+      {/* Read the email again, exactly as a recipient gets it. Read only, and
+          never locked while a send is in flight: looking changes nothing. */}
+      <button
+        onClick={() => onRead(slot)}
+        title="Read this email exactly as it will arrive"
+        style={{
+          fontSize: 13, fontWeight: 600, color: SB.dark, background: SB.tint,
+          border: '1px solid #c6e6f2', borderRadius: 7, padding: '4px 12px',
+          cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+        }}
+      >Read</button>
 
       {/* The headcount is the control on the sendable row — clicking the number
           you are about to commit to is where you would reach to check it.
@@ -1365,7 +1478,7 @@ function SlotList({ data, search, onSearch, isChecked, onToggle, onAll, onNone, 
 function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList, listData, listSearch, onListSearch,
                        isChecked, onToggleOne, onAll, onNone, selectedCount, handPicked,
                        testTo, onTestTo, onTest, testBusy, testNote, testError,
-                       onMove, onRemove, slotBusy, slotError, onSetDay, openSlotId }) {
+                       onMove, onRemove, slotBusy, slotError, onSetDay, openSlotId, onRead }) {
   if (!data) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
 
   const active = data.activeRun;
@@ -1451,6 +1564,7 @@ function ScheduleView({ data, onSend, sending, sendError, listOpen, onToggleList
                   onToggle={() => onToggleList(s.draftId)}
                   onMove={onMove}
                   onRemove={onRemove}
+                  onRead={onRead}
                   // Reordering and removing are locked while a run is in
                   // flight, and while one is being queued or moved. The slot
                   // dates come from position in this list, so a change
@@ -1627,6 +1741,7 @@ function SentView({ runs, openId, onOpen, recipients }) {
 
 export default function KeepWarm() {
   const [tab, setTab]             = useState('audience');
+  const [readCopy, setReadCopy]   = useState(null);
   // Which service-interest lane is selected, or null for all of them. Held
   // here rather than inside the cards because the audience list below has to
   // narrow to match, and two pieces of the screen reading one value is the
@@ -2389,6 +2504,20 @@ export default function KeepWarm() {
     }
   }
 
+  // Schedule tab → Read. The slot is kept so the header can say when it goes
+  // and to how many; the copy itself comes from the server.
+  async function openReadCopy(slot) {
+    setReadCopy({ slot, copy: null, loading: true, error: null });
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${slot.draftId}/read`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error === 'no_draft' ? 'That email no longer exists.' : (d.error || 'Could not open'));
+      setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, copy: d, loading: false } : s);
+    } catch (err) {
+      setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, loading: false, error: err.message } : s);
+    }
+  }
+
   async function openDraft(id) {
     try {
       const r = await fetch(`/api/keepwarm/drafts/${id}`);
@@ -2921,6 +3050,7 @@ export default function KeepWarm() {
                 onRemove={removeSlot}
                 slotBusy={slotBusy}
                 slotError={slotError}
+                onRead={openReadCopy}
               />
             </>)}
 
@@ -2935,6 +3065,12 @@ export default function KeepWarm() {
           </>
         )}
       </div>
+
+      <ReadCopyPanel
+        state={readCopy}
+        onClose={() => setReadCopy(null)}
+        onEdit={(id) => { setReadCopy(null); setTab('drafts'); openDraft(id); }}
+      />
 
       <ReadPanel
         state={open}

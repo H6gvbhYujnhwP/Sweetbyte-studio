@@ -518,6 +518,76 @@ export async function sendTest({ draftId, toEmail }) {
 }
 
 /**
+ * The Read button on the Schedule tab: one approved email, exactly as one real
+ * recipient would get it.
+ *
+ * Built with the same renderEmailHtml call the real send makes, with the same
+ * greeting rule, the same frozen example websites, signature, opt-out line and
+ * disclaimer. Two deliberate differences, both invisible to the eye:
+ *   - The unsubscribe link points nowhere. The real one is a signed link that
+ *     works for whoever clicks it, and a preview must not be able to opt a real
+ *     person out because the operator clicked the wrong thing.
+ *   - The signature pictures load from the website rather than travelling
+ *     inside the message, because a browser cannot show an attached picture.
+ *     They are the same pictures.
+ *
+ * The sample person is the first one on this email's own list right now —
+ * the lane for a lane email, the whole loop for a general one, minus anyone
+ * unticked for this draft. If the list is empty the greeting falls back to
+ * "there", which is exactly what an unnamed recipient would see, and the
+ * screen says so rather than inventing a name.
+ *
+ * Read only. Nothing is written anywhere.
+ */
+export function readCopy(draftId) {
+  const draft = getDraft(draftId);
+  if (!draft) return { ok: false, reason: 'no_draft' };
+
+  let sample = null;
+  let listSize = 0;
+  try {
+    const { included } = buildAudience();
+    let people = laneOf(included, draft.interest);
+    const skipped = draft.interest ? draftSkips(draft.id) : null;
+    if (skipped && skipped.size) {
+      people = people.filter(p => !skipped.has(normEmail(p.email)));
+    }
+    listSize = people.length;
+    sample = people[0] || null;
+  } catch (err) {
+    // The preview is still worth showing with a generic greeting; the screen
+    // is told there was no sample rather than given a made-up one.
+    console.error('[keepwarm] read copy: audience lookup failed:', err.message);
+  }
+
+  const firstName = sample ? (sample.greeting || firstNameOf(sample.contactName)) : null;
+
+  const html = renderEmailHtml({
+    bodyHtml:     draft.html_body,
+    unsubUrl:     '#',
+    firstName,
+    examplesHtml: examplesHtmlForDraft(draft.id),
+    inline:       false,
+  });
+
+  return {
+    ok: true,
+    draftId:  draft.id,
+    status:   draft.status,
+    subject:  draft.subject,
+    from:     (FROM_EMAIL && FROM_NAME) ? { name: FROM_NAME, email: FROM_EMAIL } : null,
+    to: sample ? {
+      name:    sample.contactName || null,
+      email:   normEmail(sample.email),
+      company: sample.companyName || null,
+    } : null,
+    greetingName: firstName || 'there',
+    listSize,
+    html,
+  };
+}
+
+/**
  * Undo. Only bites while the run is still queued — once the worker has claimed
  * it the first messages are with SES and there is nothing to recall.
  */
