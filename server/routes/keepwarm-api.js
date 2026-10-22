@@ -98,6 +98,7 @@ import {
 import {
   queueRun,
   sendTest,
+  readCopy,
   cancelRun,
   schedule,
   sentRuns,
@@ -863,6 +864,22 @@ router.get('/drafts/:id', (req, res) => {
     });
   } catch (err) {
     console.error('[keepwarm] get draft failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /drafts/:id/read
+ * The Schedule tab's Read button. One email exactly as a real recipient would
+ * get it — From, To, subject and the whole rendered message. Changes nothing.
+ */
+router.get('/drafts/:id/read', (req, res) => {
+  try {
+    const result = readCopy(req.params.id);
+    if (!result.ok) return res.status(404).json({ error: result.reason });
+    res.json(result);
+  } catch (err) {
+    console.error('[keepwarm] read copy failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
