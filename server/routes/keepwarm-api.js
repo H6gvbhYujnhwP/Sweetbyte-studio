@@ -869,13 +869,13 @@ router.get('/drafts/:id', (req, res) => {
 });
 
 /**
- * GET /drafts/:id/read
- * The Schedule tab's Read button. One email exactly as a real recipient would
+ * GET /drafts/:id/read[?email=someone@example.com]
+ * The Schedule tab's Read button. ?email picks whose copy from the list. One email exactly as a real recipient would
  * get it — From, To, subject and the whole rendered message. Changes nothing.
  */
 router.get('/drafts/:id/read', (req, res) => {
   try {
-    const result = readCopy(req.params.id);
+    const result = readCopy(req.params.id, req.query.email || null);
     if (!result.ok) return res.status(404).json({ error: result.reason });
     res.json(result);
   } catch (err) {

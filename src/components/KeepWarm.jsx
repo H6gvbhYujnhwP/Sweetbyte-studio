@@ -1028,9 +1028,87 @@ function ReadPanel({
  * takes it off the schedule, which is not something to do by accident while
  * just looking. "Change it in Drafts" opens the normal editing view instead.
  */
-function ReadCopyPanel({ state, onClose, onEdit }) {
+// The "Who gets it" list inside the Read view. Its own component so the search
+// box and the tick keep their own state, and so the panel above can still
+// return nothing when it is closed. Module level, per the rule at the top.
+function WhoGetsIt({ people, selected, switching, onPick }) {
+  const [search, setSearch] = useState('');
+  const [onlyThere, setOnlyThere] = useState(false);
+
+  const q = search.trim().toLowerCase();
+  const thereCount = people.filter(p => p.greeting === 'there').length;
+  const shown = people.filter(p =>
+    (!onlyThere || p.greeting === 'there')
+    && (!q || `${p.name || ''} ${p.email} ${p.company || ''}`.toLowerCase().includes(q)));
+
+  const cell = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+
+  return (
+    <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '12px 14px', marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: TEXT }}>Who gets it</span>
+        <span style={{ fontSize: 12, color: TERTIARY }}>{people.length} on this email's list today</span>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search name, email or company"
+          style={{
+            flex: 1, minWidth: 180, padding: '6px 9px', fontSize: 13, fontFamily: 'inherit',
+            border: `1px solid ${BORDER}`, borderRadius: 7,
+          }}
+        />
+        <label style={{ fontSize: 12.5, color: AMBER, display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={onlyThere} onChange={(e) => setOnlyThere(e.target.checked)}
+                 style={{ accentColor: SB.primary }} />
+          Only “Hi there” ({thereCount})
+        </label>
+      </div>
+
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 7, maxHeight: 240, overflow: 'auto' }}>
+        {shown.length === 0 && (
+          <div style={{ padding: '9px 10px', fontSize: 13, color: MUTED }}>
+            {people.length === 0 ? 'Nobody is on this email\'s list right now.' : 'Nobody matches.'}
+          </div>
+        )}
+        {shown.map(p => {
+          const isSel = p.email === selected;
+          const isLoading = p.email === switching;
+          return (
+            <div
+              key={p.email}
+              onClick={() => { if (!isSel && !switching) onPick(p.email); }}
+              style={{
+                display: 'grid', gridTemplateColumns: 'minmax(120px,1fr) minmax(170px,1.4fr) minmax(130px,1.2fr) 120px',
+                gap: 10, alignItems: 'center', padding: '7px 10px', fontSize: 12.5, minWidth: 580,
+                borderBottom: `1px solid ${BORDER}`, background: isSel ? SB.tint : CARD,
+                cursor: isSel || switching ? 'default' : 'pointer',
+              }}
+            >
+              <span style={{ ...cell, color: p.name ? TEXT : TERTIARY }}>{p.name || 'no name'}</span>
+              <span style={{ ...cell, color: MUTED }}>{p.email}</span>
+              <span style={{ ...cell, color: MUTED }}>{p.company || '—'}</span>
+              <span style={{ justifySelf: 'start', whiteSpace: 'nowrap' }}>
+                {isLoading
+                  ? <span style={{ color: TERTIARY }}>Loading…</span>
+                  : p.greeting === 'there'
+                    ? <span style={{ color: AMBER, background: AMBER_BG, borderRadius: 999, padding: '1px 8px' }}>Hi there,</span>
+                    : <span style={{ color: SB.dark, fontWeight: 600 }}>Hi {p.greeting},</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 12, color: TERTIARY, marginTop: 8, lineHeight: 1.5 }}>
+        Click anyone to see their copy below. Names come from the contact name in WorkTrackr. To fix one, change it there.
+        The final list is fixed when you press Send.
+      </div>
+    </div>
+  );
+}
+
+function ReadCopyPanel({ state, onClose, onEdit, onPick }) {
   if (!state) return null;
-  const { slot, copy, loading, error } = state;
+  const { slot, copy, loading, error, switching } = state;
 
   const who = (p) => p.name ? `${p.name} <${p.email}>` : p.email;
   const headLabel = { fontSize: 12, color: MUTED, width: 64, flexShrink: 0 };
@@ -1089,6 +1167,14 @@ function ReadCopyPanel({ state, onClose, onEdit }) {
                 <span style={{ fontSize: 15, fontWeight: 700, overflowWrap: 'anywhere' }}>{copy.subject}</span>
               </div>
             </div>
+
+            <WhoGetsIt
+              key={copy.draftId}
+              people={copy.people || []}
+              selected={copy.to ? copy.to.email : null}
+              switching={switching}
+              onPick={onPick}
+            />
 
             <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 10, lineHeight: 1.5 }}>
               {copy.to
@@ -2506,15 +2592,22 @@ export default function KeepWarm() {
 
   // Schedule tab → Read. The slot is kept so the header can say when it goes
   // and to how many; the copy itself comes from the server.
-  async function openReadCopy(slot) {
-    setReadCopy({ slot, copy: null, loading: true, error: null });
+  // With an email address it switches to that person's copy and leaves the
+  // email on screen while the new one loads, so the list does not jump about.
+  async function openReadCopy(slot, email = null) {
+    if (email) {
+      setReadCopy(s => s ? { ...s, switching: email, error: null } : s);
+    } else {
+      setReadCopy({ slot, copy: null, loading: true, switching: null, error: null });
+    }
     try {
-      const r = await fetch(`/api/keepwarm/drafts/${slot.draftId}/read`);
+      const q = email ? `?email=${encodeURIComponent(email)}` : '';
+      const r = await fetch(`/api/keepwarm/drafts/${slot.draftId}/read${q}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error === 'no_draft' ? 'That email no longer exists.' : (d.error || 'Could not open'));
-      setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, copy: d, loading: false } : s);
+      setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, copy: d, loading: false, switching: null } : s);
     } catch (err) {
-      setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, loading: false, error: err.message } : s);
+      setReadCopy(s => (s && s.slot.draftId === slot.draftId) ? { ...s, loading: false, switching: null, error: err.message } : s);
     }
   }
 
@@ -3070,6 +3163,7 @@ export default function KeepWarm() {
         state={readCopy}
         onClose={() => setReadCopy(null)}
         onEdit={(id) => { setReadCopy(null); setTab('drafts'); openDraft(id); }}
+        onPick={(email) => readCopy && openReadCopy(readCopy.slot, email)}
       />
 
       <ReadPanel

@@ -539,28 +539,41 @@ export async function sendTest({ draftId, toEmail }) {
  *
  * Read only. Nothing is written anywhere.
  */
-export function readCopy(draftId) {
+//
+// `forEmail` picks whose copy to show, from the "Who gets it" list on screen.
+// It is only honoured if that address is actually on this email's list; an
+// address that is not falls back to the first person rather than showing a
+// copy nobody will receive.
+//
+// The list comes back with every person's greeting, worked out by the same
+// rule the real send uses, so a wrong or missing name can be spotted before
+// the email goes rather than after.
+export function readCopy(draftId, forEmail = null) {
   const draft = getDraft(draftId);
   if (!draft) return { ok: false, reason: 'no_draft' };
 
-  let sample = null;
-  let listSize = 0;
+  const greetingFor = (p) => p.greeting || firstNameOf(p.contactName) || null;
+
+  let people = [];
   try {
     const { included } = buildAudience();
-    let people = laneOf(included, draft.interest);
+    people = laneOf(included, draft.interest);
     const skipped = draft.interest ? draftSkips(draft.id) : null;
     if (skipped && skipped.size) {
       people = people.filter(p => !skipped.has(normEmail(p.email)));
     }
-    listSize = people.length;
-    sample = people[0] || null;
   } catch (err) {
     // The preview is still worth showing with a generic greeting; the screen
     // is told there was no sample rather than given a made-up one.
     console.error('[keepwarm] read copy: audience lookup failed:', err.message);
+    people = [];
   }
 
-  const firstName = sample ? (sample.greeting || firstNameOf(sample.contactName)) : null;
+  const wanted = forEmail ? normEmail(forEmail) : null;
+  const sample = (wanted && people.find(p => normEmail(p.email) === wanted)) || people[0] || null;
+  const listSize = people.length;
+
+  const firstName = sample ? greetingFor(sample) : null;
 
   const html = renderEmailHtml({
     bodyHtml:     draft.html_body,
@@ -583,6 +596,12 @@ export function readCopy(draftId) {
     } : null,
     greetingName: firstName || 'there',
     listSize,
+    people: people.map(p => ({
+      name:     p.contactName || null,
+      email:    normEmail(p.email),
+      company:  p.companyName || null,
+      greeting: greetingFor(p) || 'there',
+    })),
     html,
   };
 }
