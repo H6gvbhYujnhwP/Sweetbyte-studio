@@ -1538,18 +1538,193 @@ function WriteStep({
   );
 }
 
+// The "Showing" picker at the top of the Review column.
+//
+// Every email type is listed, including ones with no drafts — those say
+// "needs writing", so a gap is visible rather than silently absent. Each type
+// also shows how many people it would go to right now, the same numbers the
+// service cards at the top of the page show.
+//
+// The types are WHO an email goes to, not what it is about: "General" is the
+// everyone-in-the-loop email from step 1, the rest are the service lanes. A
+// general email that happens to be about cyber security is still General.
+function reviewTypes(laneData) {
+  const keys = (laneData && laneData.keys) || [];
+  const counts = (laneData && laneData.counts) || {};
+  return [
+    {
+      key: 'general', label: 'General', group: 'everyone',
+      people: laneData ? laneData.audienceTotal : null,
+      match: (d) => !d.interest,
+      note: 'Goes to everyone in the loop',
+    },
+    {
+      key: '__none', label: 'General IT support', group: 'service',
+      people: laneData ? laneData.none : null,
+      match: (d) => d.interest === '__none',
+      note: 'Goes to people with no service ticked',
+    },
+    ...keys.map(k => ({
+      key: k.key, label: k.label, group: 'service',
+      people: laneData ? (counts[k.key] || 0) : null,
+      match: (d) => d.interest === k.key,
+      note: null,
+    })),
+  ];
+}
+
+// `approved` is the email-type keys that already have an approved email lined
+// up in step 3, so an empty type there reads "approved", not "needs writing".
+function TypePicker({ types, selected, onSelect, drafts, approved }) {
+  const [openList, setOpenList] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!openList) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpenList(false); };
+    const esc = (e) => { if (e.key === 'Escape') setOpenList(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [openList]);
+
+  const people = (n) => n === null || n === undefined ? '' : `${n} ${n === 1 ? 'person' : 'people'}`;
+  const draftWord = (n) => `${n} ${n === 1 ? 'draft' : 'drafts'}`;
+  const countFor = (t) => (t ? drafts.filter(t.match).length : drafts.length);
+  const current = types.find(t => t.key === selected) || null;
+
+  const option = (t, label, ppl) => {
+    const n = countFor(t);
+    const isOn = (t ? t.key : 'all') === selected;
+    const lined = !n && t && approved.has(t.key);
+    return (
+      <button
+        key={t ? t.key : 'all'}
+        role="option"
+        aria-selected={isOn}
+        onClick={() => { onSelect(t ? t.key : 'all'); setOpenList(false); }}
+        style={{
+          display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto auto', gap: 10, alignItems: 'center',
+          width: '100%', background: isOn ? BG : 'none', border: 'none', borderRadius: 6,
+          padding: '8px 10px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+          fontSize: 13, color: TEXT, fontWeight: isOn ? 600 : 400,
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap' }}>{ppl}</span>
+        <span style={{
+          fontSize: 11.5, borderRadius: 999, padding: '2px 8px', whiteSpace: 'nowrap',
+          background: n ? SB.tint : lined ? GOOD_BG : AMBER_BG,
+          color: n ? SB.dark : lined ? GOOD : AMBER,
+        }}>{n ? draftWord(n) : lined ? 'approved' : 'needs writing'}</span>
+      </button>
+    );
+  };
+
+  const heading = (text) => (
+    <div style={{
+      fontSize: 10.5, letterSpacing: '0.06em', textTransform: 'uppercase', color: TERTIARY,
+      fontWeight: 700, padding: '8px 10px 3px',
+    }}>{text}</div>
+  );
+
+  return (
+    <div ref={ref} style={{ position: 'relative', marginBottom: 10 }}>
+      <button
+        onClick={() => setOpenList(v => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={openList}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: CARD,
+          border: '1px solid #c6e6f2', borderRadius: 8, padding: '8px 10px', cursor: 'pointer',
+          textAlign: 'left', fontFamily: 'inherit', fontSize: 13, color: TEXT,
+        }}
+      >
+        <span style={{ fontSize: 12, color: MUTED }}>Showing</span>
+        <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {current ? current.label : 'All types'}
+        </b>
+        <span style={{ fontSize: 12, color: MUTED, whiteSpace: 'nowrap' }}>
+          {current
+            ? [people(current.people), draftWord(countFor(current))].filter(Boolean).join(' · ')
+            : draftWord(drafts.length)}
+        </span>
+        <span aria-hidden="true">▾</span>
+      </button>
+
+      {openList && (
+        <div role="listbox" style={{
+          position: 'absolute', left: 0, right: 0, top: 'calc(100% + 4px)', zIndex: 6,
+          background: CARD, border: `1px solid ${BORDER}`, borderRadius: 9, padding: 4,
+          boxShadow: '0 10px 28px rgba(15,29,63,0.16)', maxHeight: 420, overflowY: 'auto',
+        }}>
+          {option(null, 'All types', '')}
+          <div style={{ height: 1, background: BORDER, margin: '4px 6px' }} />
+          {heading('Goes to everyone')}
+          {types.filter(t => t.group === 'everyone').map(t => option(t, t.label, people(t.people)))}
+          {heading('By service')}
+          {types.filter(t => t.group === 'service').map(t => option(t, t.label, people(t.people)))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Step 2. Every draft not yet approved. The bin sits under a small link at the
 // bottom so binned emails are out of the way but can still be brought back.
-function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin, onRestore, onEmptyBin, emptying }) {
+function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin, onRestore, onEmptyBin, emptying, laneData, scheduledSlots }) {
   const [showBin, setShowBin] = useState(false);
+  const [type, setType] = useState('all');
   const note = waiting.length
     ? `${waiting.length} waiting for you. Read, then approve or bin.`
     : 'All caught up.';
 
+  const types = reviewTypes(laneData);
+  const current = types.find(t => t.key === type) || null;
+  const shown = current ? waiting.filter(current.match) : waiting;
+  const ppl = (n) => `${n} ${n === 1 ? 'person' : 'people'}`;
+  // Which types already have an approved email waiting in step 3.
+  const approved = new Set((scheduledSlots || []).map(sl => sl.interest || 'general'));
+
   return (
     <Column n={2} title="Review" note={note} need={need}>
-      {waiting.length === 0 && <EmptyNote>Nothing to review. Write some new emails in step 1.</EmptyNote>}
-      {waiting.map(d => (
+      <TypePicker types={types} selected={type} onSelect={setType} drafts={waiting} approved={approved} />
+
+      {/* What the picked type means, or what to do when it has nothing. */}
+      {current && shown.length > 0 && (
+        <div style={{ fontSize: 12, color: MUTED, margin: '-2px 2px 10px', lineHeight: 1.45 }}>
+          {current.note || (current.people !== null ? `Only the ${ppl(current.people)} whose turn it is for ${current.label}` : current.label)}.
+          {' '}{shown.length} {shown.length === 1 ? 'draft' : 'drafts'} waiting.
+        </div>
+      )}
+      {current && shown.length === 0 && approved.has(current.key) && (
+        <div style={{
+          fontSize: 12.5, color: GOOD, background: GOOD_BG, borderRadius: 7,
+          padding: '9px 11px', marginBottom: 10, lineHeight: 1.5,
+        }}>
+          <b>Nothing to review for {current.label}.</b> One is already approved and lined up in step 3.
+        </div>
+      )}
+      {current && shown.length === 0 && !approved.has(current.key) && (
+        <div style={{
+          fontSize: 12.5, color: AMBER, background: AMBER_BG, borderRadius: 7,
+          padding: '9px 11px', marginBottom: 10, lineHeight: 1.5,
+        }}>
+          <b>No {current.label} drafts.</b>{' '}
+          {current.people === null ? ''
+            : current.people > 0 ? `It would go to ${ppl(current.people)}. `
+            : 'Nobody is due this one right now, so it would go to no one. '}
+          {current.key === 'general'
+            ? 'Write one in step 1 above.'
+            : `Press Write on the ${current.label} card at the top of the page.`}
+        </div>
+      )}
+
+      {!current && waiting.length === 0 && <EmptyNote>Nothing to review. Write some new emails in step 1.</EmptyNote>}
+      {shown.map(d => (
         <Tile key={d.id}>
           <LaneTag interest={d.interest} />
           <TileSubject>{d.subject}</TileSubject>
@@ -2056,6 +2231,17 @@ export default function KeepWarm() {
     } catch { /* leave the previous view on screen rather than blanking it */ }
   }, []);
 
+  // People per email type, for the Review column's picker — the same numbers
+  // the service cards show.
+  const [laneData, setLaneData] = useState(null);
+  const loadLaneData = useCallback(async () => {
+    try {
+      const r = await fetch('/api/keepwarm/interests');
+      const d = await r.json();
+      if (r.ok) setLaneData(d);
+    } catch { /* the picker shows types without people counts */ }
+  }, []);
+
   const loadSent = useCallback(async () => {
     try {
       const r = await fetch('/api/keepwarm/sent');
@@ -2069,9 +2255,9 @@ export default function KeepWarm() {
   // Load a tab's data when you land on it, so switching back after a send shows
   // the new state rather than a stale one.
   useEffect(() => {
-    if (tab === 'emails') { loadSchedule(); loadIdeas(); loadSent(); }
+    if (tab === 'emails') { loadSchedule(); loadIdeas(); loadSent(); loadLaneData(); }
     if (tab === 'sent') loadSent();
-  }, [tab, loadSchedule, loadSent, loadIdeas]);
+  }, [tab, loadSchedule, loadSent, loadIdeas, loadLaneData]);
 
   // While a run is queued or sending, refresh every few seconds. Stops as soon
   // as the run finishes — no point polling an idle screen forever.
@@ -2770,7 +2956,7 @@ export default function KeepWarm() {
           selected={lane}
           onSelect={setLane}
           onOpenDraft={openDraft}
-          onDraftsChanged={() => { loadDrafts(); loadOverview(); loadSchedule(); }}
+          onDraftsChanged={() => { loadDrafts(); loadOverview(); loadSchedule(); loadLaneData(); }}
         />
 
         <TabBar tab={tab} onPick={setTab} badges={{ emails: emailsBadge }} />
@@ -3075,6 +3261,8 @@ export default function KeepWarm() {
                   onRestore={(id) => setStatus(id, 'draft')}
                   onEmptyBin={emptyTheBin}
                   emptying={emptying}
+                  laneData={laneData}
+                  scheduledSlots={schedule ? schedule.slots : []}
                 />
                 <SendColumn
                   data={schedule}
