@@ -60,6 +60,58 @@ db.exec(`
 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Which kind of email a line is for
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Every line now carries a type: NULL for a General email (everyone in the
+// loop), or a service-lane key such as 'website'. Ticking a Website line writes
+// a Website email that only goes to the Website people.
+//
+// `lane_suggested` = 1 means Studio guessed the type from the wording and the
+// operator has not looked at it yet. The screen marks those "suggested" until
+// the type is changed by hand or "These look right" is pressed.
+//
+// Lane keys are checked against the real list in the routes file, which owns
+// INTEREST_KEYS; this file stores what it is given.
+
+// Studio's guess, from the words in the line. First match wins, so the more
+// specific services come before the broad ones: "When the Wi-Fi is slow but
+// the line is fast" is a Wi-Fi line, not a broadband one.
+const SUGGEST_RULES = [
+  ['cyber_security', /cyber|secur|hack|phish|scam|dodgy email|password|ransom|virus|malware/i],
+  ['wifi',           /wi-?fi|wireless/i],
+  ['website',        /web ?site|shop window|\bseo\b|online presence/i],
+  ['domains',        /domain|hosting|\bdns\b/i],
+  ['microsoft_365',  /microsoft|office 365|\bm365\b|outlook|\bteams\b|office licen|sharepoint|onedrive/i],
+  ['voip',           /phone|voip|telephon|\bcalls?\b|switchboard/i],
+  ['internet',       /broadband|internet|fib(re|er)|connection|\bline\b/i],
+  ['custom_apps',    /\bapps?\b|software|automat|spreadsheet|manual task|workflow/i],
+];
+
+export function suggestLane(text) {
+  const t = String(text || '');
+  for (const [key, re] of SUGGEST_RULES) if (re.test(t)) return key;
+  return null;
+}
+
+// Added after the table existed. On the first start with these columns, every
+// line already there gets Studio's guess and is marked suggested, so the
+// operator checks them once rather than sorting thirty-odd lines by hand.
+try {
+  const cols = db.prepare(`PRAGMA table_info(keepwarm_subject_ideas)`).all().map(c => c.name);
+  if (!cols.includes('lane')) {
+    db.exec(`ALTER TABLE keepwarm_subject_ideas ADD COLUMN lane TEXT`);
+    db.exec(`ALTER TABLE keepwarm_subject_ideas ADD COLUMN lane_suggested INTEGER NOT NULL DEFAULT 0`);
+    const rows = db.prepare(`SELECT id, text FROM keepwarm_subject_ideas`).all();
+    const upd = db.prepare(`UPDATE keepwarm_subject_ideas SET lane = ?, lane_suggested = 1 WHERE id = ?`);
+    db.transaction(() => { for (const r of rows) upd.run(suggestLane(r.text), r.id); })();
+    console.log(`[keepwarm] subject lines: added types, suggested for ${rows.length} line(s)`);
+  }
+} catch (err) {
+  console.error('[keepwarm] subject line type migration failed:', err.message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Reading
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -84,6 +136,8 @@ export function listIdeas() {
         i.id,
         i.text,
         i.created_at,
+        i.lane,
+        i.lane_suggested,
         EXISTS (
           SELECT 1 FROM keepwarm_runs r
            WHERE r.status = 'sent' AND r.subject = i.text
@@ -100,7 +154,7 @@ export function listIdeas() {
     `).all();
   } catch {
     rows = db.prepare(`
-      SELECT id, text, created_at, 0 AS sent, 0 AS in_drafts
+      SELECT id, text, created_at, lane, lane_suggested, 0 AS sent, 0 AS in_drafts
         FROM keepwarm_subject_ideas
        WHERE deleted_at IS NULL
        ORDER BY created_at ASC
@@ -112,6 +166,9 @@ export function listIdeas() {
     text:    r.text,
     state:   r.sent ? 'sent' : (r.in_drafts ? 'in drafts' : 'unused'),
     usable:  !r.sent && !r.in_drafts,
+    // null = General. Otherwise a service-lane key.
+    lane:      r.lane || null,
+    suggested: !!r.lane_suggested,
   }));
 }
 
@@ -128,31 +185,36 @@ export function unusedCount() {
  * asked for — they would have no way of knowing which of their lines went
  * missing or why.
  */
+// `lines` carries each picked line's type as well, so the generator can write a
+// Website line as a Website email. `subjects` is the plain text list, as before.
 export function resolveIdeas(ids = []) {
   const wanted = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
-  if (wanted.length === 0) return { subjects: [], error: null };
+  if (wanted.length === 0) return { subjects: [], lines: [], error: null };
 
   const all = listIdeas();
   const byId = new Map(all.map(i => [i.id, i]));
   const subjects = [];
+  const lines = [];
 
   for (const id of wanted) {
     const idea = byId.get(id);
     if (!idea) {
-      return { subjects: [], error: 'One of the subject lines you picked is no longer there. Refresh the page and try again.' };
+      return { subjects: [], lines: [], error: 'One of the subject lines you picked is no longer there. Refresh the page and try again.' };
     }
     if (!idea.usable) {
       return {
         subjects: [],
+        lines: [],
         error: idea.state === 'sent'
           ? `"${idea.text}" has already been sent, so it cannot be used again.`
           : `"${idea.text}" is already sitting in a draft. Approve or bin that one first.`,
       };
     }
     subjects.push(idea.text);
+    lines.push({ text: idea.text, lane: idea.lane });
   }
 
-  return { subjects, error: null };
+  return { subjects, lines, error: null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,7 +235,9 @@ export function resolveIdeas(ids = []) {
  * possible. A binned line that never went out is a change of mind rather than
  * history, so pasting it back restores it.
  */
-export function addIdeas(input) {
+// `lane` is the type picked beside the Add box: a lane key, null for General,
+// or 'auto' to let Studio guess each line (marked suggested).
+export function addIdeas(input, lane = 'auto') {
   const lines = String(input || '')
     .split('\n')
     .map(norm)
@@ -207,8 +271,10 @@ export function addIdeas(input) {
   } catch { /* no runs table yet — nothing has been sent */ }
 
   const ins = db.prepare(
-    'INSERT INTO keepwarm_subject_ideas (id, text) VALUES (?, ?)'
+    'INSERT INTO keepwarm_subject_ideas (id, text, lane, lane_suggested) VALUES (?, ?, ?, ?)'
   );
+  const auto = lane === 'auto';
+  const laneFor = (text) => (auto ? suggestLane(text) : (lane || null));
   const restore = db.prepare(
     'UPDATE keepwarm_subject_ideas SET deleted_at = NULL WHERE id = ?'
   );
@@ -223,7 +289,7 @@ export function addIdeas(input) {
 
       if (!row) {
         const id = uuid();
-        ins.run(id, line);
+        ins.run(id, line, laneFor(line), auto ? 1 : 0);
         byKey.set(key, { id, text: line, deleted_at: null });
         added++;
         continue;
@@ -243,6 +309,28 @@ export function addIdeas(input) {
 
   if (added) console.log(`[keepwarm] added ${added} subject line(s)${skipped ? `, skipped ${skipped} already there` : ''}`);
   return { added, skipped, error: null };
+}
+
+/**
+ * Change a line's type by hand. Clears the "suggested" mark, because the
+ * operator has now decided.
+ */
+export function setIdeaLane(id, lane) {
+  const res = db.prepare(`
+    UPDATE keepwarm_subject_ideas
+       SET lane = ?, lane_suggested = 0
+     WHERE id = ? AND deleted_at IS NULL
+  `).run(lane || null, String(id || ''));
+  return { ok: !!res.changes };
+}
+
+/** "These look right" — keep every suggested type as it is and clear the marks. */
+export function confirmSuggestedLanes() {
+  const res = db.prepare(`
+    UPDATE keepwarm_subject_ideas SET lane_suggested = 0
+     WHERE lane_suggested = 1 AND deleted_at IS NULL
+  `).run();
+  return { ok: true, confirmed: res.changes };
 }
 
 /**

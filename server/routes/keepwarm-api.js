@@ -88,6 +88,8 @@ import {
   addIdeas,
   deleteIdea,
   resolveIdeas,
+  setIdeaLane,
+  confirmSuggestedLanes,
 } from '../services/keepwarm-subjects.js';
 import {
   listDead,
@@ -688,11 +690,55 @@ router.get('/subjects', (req, res) => {
  */
 router.post('/subjects', (req, res) => {
   try {
-    const result = addIdeas((req.body || {}).text);
+    // `lane` is the type picked beside the Add box: 'auto' (Studio guesses),
+    // 'general', or a service-lane key. Anything else is refused rather than
+    // stored, so a line can never carry a type the generator does not know.
+    const raw = (req.body || {}).lane;
+    const lane = raw === undefined || raw === 'auto' ? 'auto'
+      : raw === 'general' || raw === null ? null
+      : String(raw);
+    if (lane !== 'auto' && lane !== null && !isLaneKey(lane)) {
+      return res.status(400).json({ error: 'That is not an email type Studio knows.' });
+    }
+    const result = addIdeas((req.body || {}).text, lane);
     if (result.error) return res.status(400).json({ error: result.error });
     res.json({ ...result, ideas: listIdeas() });
   } catch (err) {
     console.error('[keepwarm] subject add failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /subjects/:id  { lane }   — 'general' or a service-lane key
+ * Move one line to another type. Clears its "suggested" mark.
+ */
+router.put('/subjects/:id', (req, res) => {
+  try {
+    const raw = (req.body || {}).lane;
+    const lane = raw === 'general' || raw === null || raw === undefined ? null : String(raw);
+    if (lane !== null && !isLaneKey(lane)) {
+      return res.status(400).json({ error: 'That is not an email type Studio knows.' });
+    }
+    const result = setIdeaLane(req.params.id, lane);
+    if (!result.ok) return res.status(404).json({ error: 'That line is not there.' });
+    res.json({ ok: true, ideas: listIdeas() });
+  } catch (err) {
+    console.error('[keepwarm] subject type change failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /subjects/confirm-types
+ * "These look right" — keep Studio's suggested types and clear the marks.
+ */
+router.post('/subjects/confirm-types', (_req, res) => {
+  try {
+    confirmSuggestedLanes();
+    res.json({ ok: true, ideas: listIdeas() });
+  } catch (err) {
+    console.error('[keepwarm] subject type confirm failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -732,7 +778,7 @@ router.post('/generate', async (req, res) => {
   // Subject lines the operator ticked. Each one becomes exactly one draft,
   // carrying that line word for word; the rest of the batch is Studio's own
   // ideas as before. Ticking none is the original behaviour untouched.
-  const { subjects: picked, error: pickError } = resolveIdeas((req.body || {}).subjectIds);
+  const { subjects: picked, lines: pickedLines, error: pickError } = resolveIdeas((req.body || {}).subjectIds);
   if (pickError) return res.status(400).json({ error: pickError });
 
   // Refused rather than silently trimmed. Somebody who ticks four lines and
@@ -760,10 +806,24 @@ router.post('/generate', async (req, res) => {
     // Written one at a time because each has its own fixed subject, and in
     // sequence rather than all at once so a rate limit surfaces as one clear
     // failure rather than a partial batch with a gap in the middle.
+    //
+    // A General line becomes a General draft, as it always did. A line typed
+    // for a service becomes a draft FOR THAT SERVICE: same word-for-word
+    // subject, saved against the lane so it only ever reaches the people
+    // ticked for it, and given the lane's example websites the same way the
+    // service card's Write button does. A line whose type is a lane Studio no
+    // longer has is refused for that one email, never quietly sent to everyone.
     const fromLines = [];
-    for (const subject of picked) {
+    const laneLines = [];
+    for (const { text: subject, lane } of pickedLines) {
+      if (lane && !isLaneKey(lane)) {
+        notes.push(`Your own line "${subject}" is set to a type Studio no longer has, so it was not used. Change its type and try again.`);
+        continue;
+      }
       try {
-        fromLines.push(await generateFromSubject({ subject, avoid: previous }));
+        const draft = await generateFromSubject({ subject, avoid: previous });
+        if (lane) laneLines.push({ lane, draft });
+        else fromLines.push(draft);
       } catch (err) {
         notes.push(`Your own line "${subject}" could not be used: ${err.message}`);
       }
@@ -788,11 +848,35 @@ router.post('/generate', async (req, res) => {
     }
 
     const drafts = [...fromLines, ...invented];
-    if (drafts.length === 0) {
+    if (drafts.length === 0 && laneLines.length === 0) {
       throw new Error(`Nothing usable came back. ${notes.join(' ')}`.trim());
     }
 
-    insertDrafts(batchId, drafts);
+    if (drafts.length) insertDrafts(batchId, drafts);
+
+    // Service lines, one at a time, each saved against its lane. The example
+    // websites are worked out before saving, exactly as on the service card,
+    // so a draft is never left with half a sentence of examples.
+    for (const { lane, draft } of laneLines) {
+      try {
+        let frozen = null;
+        if (laneTakesExamples(lane)) {
+          const sites = takeNextExamples(lane, EXAMPLES_PER_EMAIL);
+          if (sites.length) {
+            const lead = await writeLeadSentence({ lane, count: sites.length });
+            frozen = { lane, lead, sites };
+          }
+        }
+        const { ids } = insertDrafts(batchId, [draft], { interest: lane });
+        if (frozen && ids[0]) freezeExamplesForDraft(ids[0], frozen);
+        drafts.push(draft);
+      } catch (err) {
+        notes.push(`Your own line "${draft.subject}" could not be saved as a ${lane} email: ${err.message}`);
+      }
+    }
+    if (drafts.length === 0) {
+      throw new Error(`Nothing usable came back. ${notes.join(' ')}`.trim());
+    }
     finishBatch(batchId);
 
     const short = drafts.length < count;

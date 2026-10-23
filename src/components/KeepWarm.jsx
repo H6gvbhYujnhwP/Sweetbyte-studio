@@ -713,38 +713,6 @@ function DeadRow({ row, onRemove, busy }) {
 // is already sitting in a draft, is shown struck through and cannot be ticked —
 // visible rather than hidden, so it is obvious the line was used rather than
 // lost. Module level, per the SUB-COMPONENT RULE at the top of the file.
-function SubjectIdeaRow({ idea, checked, onToggle, onDelete, busy }) {
-  const usable = idea.usable;
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '8px 12px', borderBottom: `1px solid ${BORDER}`,
-    }}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={!usable || busy}
-        onChange={() => onToggle(idea.id)}
-        style={{ width: 15, height: 15, cursor: usable ? 'pointer' : 'default', flexShrink: 0 }}
-      />
-      <span style={{
-        flex: 1, minWidth: 0, fontSize: 13,
-        color: usable ? TEXT : TERTIARY,
-        textDecoration: usable ? 'none' : 'line-through',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>
-        {idea.text}
-      </span>
-      {!usable && (
-        <span style={{ fontSize: 12, color: TERTIARY, flexShrink: 0 }}>{idea.state}</span>
-      )}
-      <Button tone="plain" disabled={busy} onClick={() => onDelete(idea.id)} style={{ flexShrink: 0, padding: '3px 9px', fontSize: 12 }}>
-        Bin
-      </Button>
-    </div>
-  );
-}
-
 // The send-day banner. Three states and nothing in between: today is the day
 // and it has not gone, today is the day and it has, or it is neither and the
 // next date is worth knowing quietly.
@@ -1426,17 +1394,105 @@ function EmptyNote({ children }) {
 }
 
 // Step 1. One line, with your own subject lines folded away underneath until
-// you want them. Lines that have already gone out are hidden — they are kept
-// on the server so the same subject can never be sent twice, but there is no
-// reason to look at them. Lines sitting in a draft stay, greyed.
+// you want them.
+//
+// The lines are sorted into sections by the kind of email they are for:
+// General (everyone in the loop) and one section per service. Ticking a
+// Website line writes a Website email that only reaches the Website people —
+// the server does that; this screen only shows which section a line is in.
+//
+// Lines that have already gone out are hidden — they are kept on the server so
+// the same subject can never be sent twice, but there is no reason to look at
+// them. Lines sitting in a draft stay, greyed.
+function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, busy }) {
+  const usable = idea.usable;
+  const current = idea.lane || 'general';
+  const known = types.some(t => t.key === current);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      padding: '7px 12px', borderTop: `1px solid ${BORDER}`,
+    }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={!usable || busy}
+        onChange={() => onToggle(idea.id)}
+        aria-label={`Use “${idea.text}”`}
+        style={{ width: 15, height: 15, cursor: usable ? 'pointer' : 'default', flexShrink: 0, accentColor: SB.primary }}
+      />
+      <span style={{
+        flex: 1, minWidth: 160, fontSize: 13,
+        color: usable ? TEXT : TERTIARY,
+        textDecoration: usable ? 'none' : 'line-through',
+        overflowWrap: 'anywhere',
+      }}>
+        {idea.text}
+      </span>
+      {!usable && <span style={{ fontSize: 12, color: TERTIARY, flexShrink: 0 }}>{idea.state}</span>}
+      {idea.suggested && (
+        <span style={{
+          fontSize: 10.5, borderRadius: 999, padding: '1px 7px', whiteSpace: 'nowrap',
+          background: AMBER_BG, color: AMBER, flexShrink: 0,
+        }}>suggested</span>
+      )}
+      <select
+        value={current}
+        disabled={busy}
+        onChange={(e) => onSetLane(idea.id, e.target.value)}
+        aria-label="What kind of email this line is for"
+        style={{
+          fontSize: 12, padding: '3px 6px', border: `1px solid ${BORDER}`, borderRadius: 6,
+          fontFamily: 'inherit', background: CARD, color: TEXT, flexShrink: 0, maxWidth: 190,
+        }}
+      >
+        {!known && <option value={current}>{laneLabel(current)} (no longer used)</option>}
+        {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+      </select>
+      <Button tone="ghost" disabled={busy} onClick={() => onDelete(idea.id)} style={{ flexShrink: 0, padding: '3px 9px', fontSize: 12 }}>
+        Bin
+      </Button>
+    </div>
+  );
+}
+
 function WriteStep({
   count, counts, onCount, onGenerate, generating, canGenerate,
   ideas, picked, onToggleIdea, onBinIdea, ideaBusy, ideaText, onIdeaText, onAddIdeas,
+  laneData, onSetLane, onConfirmTypes, newLane, onNewLane,
 }) {
   const [foldOpen, setFoldOpen] = useState(false);
+  // Which sections are open. General starts open: it is the one most used.
+  const [openSecs, setOpenSecs] = useState(() => new Set(['general']));
+
+  const types = reviewTypes(laneData);
   const live = ideas.filter(i => i.state !== 'sent');
   const sentHidden = ideas.length - live.length;
   const unused = ideas.filter(i => i.usable).length;
+  const anySuggested = live.some(i => i.suggested);
+  const keyOf = (i) => i.lane || 'general';
+  const labelOf = (key) => (types.find(t => t.key === key) || {}).label || laneLabel(key);
+
+  // Sections in the usual order, plus any type a line still carries that
+  // Studio no longer has, so nothing is ever hidden by being mis-filed.
+  const sectionKeys = [
+    ...types.map(t => t.key),
+    ...Array.from(new Set(live.map(keyOf))).filter(k => !types.some(t => t.key === k)),
+  ].filter(k => live.some(i => keyOf(i) === k));
+
+  // What pressing Write will produce, in words.
+  const pickedIdeas = ideas.filter(i => picked.includes(i.id));
+  const byType = {};
+  for (const i of pickedIdeas) byType[labelOf(keyOf(i))] = (byType[labelOf(keyOf(i))] || 0) + 1;
+  const mix = Object.entries(byType).map(([label, n]) => `${n} ${label}`).join(', ');
+
+  const toggleSec = (k) => setOpenSecs(prev => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+
+  const ppl = (n) => (n === null || n === undefined ? '' : `${n} ${n === 1 ? 'person' : 'people'}`);
 
   return (
     <div style={{
@@ -1473,7 +1529,7 @@ function WriteStep({
         <div style={{ fontSize: 12, marginTop: 8, color: picked.length > count ? DANGER : TERTIARY }}>
           {picked.length > count
             ? `${picked.length} lines ticked but only ${count} emails asked for — untick ${picked.length - count}, or ask for more.`
-            : `${picked.length} from your lines, ${count - picked.length} from Studio's own ideas.`}
+            : `${picked.length} from your lines (${mix})${count - picked.length > 0 ? `, ${count - picked.length} General from Studio's own ideas` : ''}.`}
         </div>
       )}
 
@@ -1493,30 +1549,81 @@ function WriteStep({
       {foldOpen && (
         <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, lineHeight: 1.5 }}>
-            Tick a line and Studio writes an email around it, word for word.
+            Tick a line and Studio writes an email around it, word for word. A line in a service
+            section becomes an email for that service, and only goes to the people ticked for it.
           </div>
-          {live.length > 0 && (
+
+          {anySuggested && (
             <div style={{
-              border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden',
-              maxHeight: 260, overflowY: 'auto', marginBottom: 8,
+              display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+              background: SB.tint, color: SB.dark, borderRadius: 8, padding: '9px 11px',
+              marginBottom: 10, fontSize: 12.5, lineHeight: 1.45,
             }}>
-              {live.map(i => (
-                <SubjectIdeaRow
-                  key={i.id}
-                  idea={i}
-                  checked={picked.includes(i.id)}
-                  onToggle={onToggleIdea}
-                  onDelete={onBinIdea}
-                  busy={ideaBusy || generating}
-                />
-              ))}
+              <span style={{ flex: 1, minWidth: 220 }}>
+                <b>Studio has sorted your lines by their wording.</b> The ones marked “suggested” are
+                its guesses. Change any that are wrong, then press “These look right”.
+              </span>
+              <Button style={{ padding: '4px 10px', fontSize: 12 }} disabled={ideaBusy} onClick={onConfirmTypes}>
+                These look right
+              </Button>
             </div>
           )}
+
+          {sectionKeys.map(k => {
+            const t = types.find(x => x.key === k);
+            const rows = live.filter(i => keyOf(i) === k);
+            const free = rows.filter(i => i.usable).length;
+            const ticked = rows.filter(i => picked.includes(i.id)).length;
+            const isOpen = openSecs.has(k);
+            return (
+              <div key={k} style={{ border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 8, overflow: 'hidden' }}>
+                <button
+                  onClick={() => toggleSec(k)}
+                  aria-expanded={isOpen}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', width: '100%',
+                    background: '#fafaf8', border: 'none', padding: '9px 12px', cursor: 'pointer',
+                    textAlign: 'left', fontFamily: 'inherit', fontSize: 13, color: TEXT,
+                  }}
+                >
+                  <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+                  <b style={{ flex: 1, minWidth: 120 }}>{t ? t.label : `${laneLabel(k)} (no longer used)`}</b>
+                  {t && (
+                    <span style={{ fontSize: 11.5, color: TERTIARY }}>
+                      {k === 'general' ? 'Everyone in the loop' : k === '__none' ? 'No service ticked' : 'Only those ticked'}
+                      {t.people !== null ? ` · ${ppl(t.people)}` : ''}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, color: MUTED }}>
+                    {free} unused{ticked ? ` · ${ticked} ticked` : ''}
+                  </span>
+                </button>
+                {isOpen && rows.map(i => (
+                  <SubjectLineRow
+                    key={i.id}
+                    idea={i}
+                    types={types}
+                    checked={picked.includes(i.id)}
+                    onToggle={onToggleIdea}
+                    onDelete={onBinIdea}
+                    onSetLane={(id, lane) => {
+                      // Open the section it moved to, so it does not vanish from view.
+                      setOpenSecs(prev => new Set(prev).add(lane));
+                      onSetLane(id, lane);
+                    }}
+                    busy={ideaBusy || generating}
+                  />
+                ))}
+              </div>
+            );
+          })}
+
           {sentHidden > 0 && (
             <div style={{ fontSize: 12, color: TERTIARY, marginBottom: 8 }}>
               {sentHidden} already sent, hidden. {sentHidden === 1 ? 'It' : 'They'} can't be used again.
             </div>
           )}
+
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <textarea
               value={ideaText}
@@ -1528,6 +1635,18 @@ function WriteStep({
                 border: `1px solid ${BORDER}`, borderRadius: 7, fontFamily: 'inherit', resize: 'vertical',
               }}
             />
+            <select
+              value={newLane}
+              onChange={(e) => onNewLane(e.target.value)}
+              aria-label="What kind of email the new lines are for"
+              style={{
+                fontSize: 13, padding: '6px 8px', border: `1px solid ${BORDER}`, borderRadius: 7,
+                fontFamily: 'inherit', background: CARD, maxWidth: 200,
+              }}
+            >
+              <option value="auto">Let Studio suggest</option>
+              {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
             <Button onClick={onAddIdeas} disabled={ideaBusy || !ideaText.trim()}>
               {ideaBusy ? 'Saving…' : 'Add'}
             </Button>
@@ -1548,8 +1667,14 @@ function WriteStep({
 // The types are WHO an email goes to, not what it is about: "General" is the
 // everyone-in-the-loop email from step 1, the rest are the service lanes. A
 // general email that happens to be about cyber security is still General.
+// The service lanes in their usual order, for when the people counts have not
+// loaded yet — so a Website line still has a Website section to sit in.
+const FALLBACK_LANES = Object.keys(LANE_LABELS)
+  .filter(k => k !== 'it_support' && k !== '__none')
+  .map(k => ({ key: k, label: LANE_LABELS[k] }));
+
 function reviewTypes(laneData) {
-  const keys = (laneData && laneData.keys) || [];
+  const keys = (laneData && laneData.keys) || FALLBACK_LANES;
   const counts = (laneData && laneData.counts) || {};
   return [
     {
@@ -2072,6 +2197,8 @@ export default function KeepWarm() {
   const [pickedIdeas, setPicked]  = useState([]);
   const [ideaText, setIdeaText]   = useState('');
   const [ideaBusy, setIdeaBusy]   = useState(false);
+  // The type picked beside the Add box for new subject lines.
+  const [ideaLane, setIdeaLane]   = useState('auto');
   const [dead, setDead]           = useState(null);
   const [deadBusy, setDeadBusy]   = useState(false);
   const [search, setSearch]       = useState('');
@@ -2234,6 +2361,7 @@ export default function KeepWarm() {
   // People per email type, for the Review column's picker — the same numbers
   // the service cards show.
   const [laneData, setLaneData] = useState(null);
+  const [lanesKey, setLanesKey] = useState(0);
   const loadLaneData = useCallback(async () => {
     try {
       const r = await fetch('/api/keepwarm/interests');
@@ -2721,13 +2849,49 @@ export default function KeepWarm() {
       const r = await fetch('/api/keepwarm/subjects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, lane: ideaLane }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'could not add');
       setIdeas(d.ideas || []);
       setIdeaText('');
       if (d.skipped) setGenNote(`${d.added} added. ${d.skipped} were already on the list.`);
+    } catch (err) {
+      setGenError(err.message);
+    } finally {
+      setIdeaBusy(false);
+    }
+  }
+
+  // Move a subject line to another type ('general' or a service key).
+  async function changeIdeaLane(id, lane) {
+    setIdeaBusy(true);
+    setGenError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/subjects/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lane }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not change the type');
+      setIdeas(d.ideas || []);
+    } catch (err) {
+      setGenError(err.message);
+    } finally {
+      setIdeaBusy(false);
+    }
+  }
+
+  // "These look right" — keep Studio's suggested types.
+  async function confirmIdeaLanes() {
+    setIdeaBusy(true);
+    setGenError(null);
+    try {
+      const r = await fetch('/api/keepwarm/subjects/confirm-types', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not save');
+      setIdeas(d.ideas || []);
     } catch (err) {
       setGenError(err.message);
     } finally {
@@ -2770,6 +2934,11 @@ export default function KeepWarm() {
       setPicked([]);
       await loadDrafts();
       await loadIdeas();
+      // A ticked service line makes a service email, so the service cards at
+      // the top and the Review picker's counts both need re-reading. The cards
+      // keep their own data, so they are re-mounted to make them fetch again.
+      await loadLaneData();
+      setLanesKey(k => k + 1);
     } catch (err) {
       setGenError(err.message);
     } finally {
@@ -2953,6 +3122,7 @@ export default function KeepWarm() {
         </p>
 
         <KeepWarmLanes
+          key={lanesKey}
           selected={lane}
           onSelect={setLane}
           onOpenDraft={openDraft}
@@ -3243,6 +3413,11 @@ export default function KeepWarm() {
                 ideaText={ideaText}
                 onIdeaText={setIdeaText}
                 onAddIdeas={addIdeaLines}
+                laneData={laneData}
+                onSetLane={changeIdeaLane}
+                onConfirmTypes={confirmIdeaLanes}
+                newLane={ideaLane}
+                onNewLane={setIdeaLane}
               />
 
               {/* ── Steps 2 and 3, and what went last ──────────────────── */}
