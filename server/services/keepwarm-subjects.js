@@ -324,6 +324,66 @@ export function setIdeaLane(id, lane) {
   return { ok: !!res.changes };
 }
 
+/**
+ * Change the wording of a line. Returns { ok } or { ok: false, error } with a
+ * sentence the screen shows as it is.
+ *
+ * Only an unused line can be changed. A line is linked to its draft and to its
+ * send by the exact wording, so changing a line that is in a draft would make it
+ * look unused while the draft still carries the old words, and a sent line must
+ * stay exactly as it went for the never-twice rule to hold.
+ *
+ * The new wording is refused if it matches another line on the list, a subject
+ * that has already been sent, or a subject a live draft already carries — each
+ * of those would let the same subject go out twice.
+ */
+export function editIdea(id, input) {
+  const text = norm(input).slice(0, MAX_LEN);
+  if (!text) return { ok: false, error: 'The line cannot be empty.' };
+
+  const idea = listIdeas().find(i => i.id === String(id || ''));
+  if (!idea) return { ok: false, error: 'That line is not there any more. Refresh the page.' };
+  if (idea.state === 'sent') return { ok: false, error: 'That line has already been sent, so it cannot be changed.' };
+  if (idea.state === 'in drafts') {
+    return { ok: false, error: 'That line is in a draft. Bin or approve the draft first, then change the line.' };
+  }
+  if (text === idea.text) return { ok: true, unchanged: true };
+
+  const key = text.toLowerCase();
+
+  // Another line with the same words — live, or binned after it went out.
+  const others = db.prepare(
+    'SELECT id, text, deleted_at FROM keepwarm_subject_ideas WHERE id != ?'
+  ).all(idea.id).filter(r => r.text.toLowerCase() === key);
+  if (others.some(r => !r.deleted_at)) return { ok: false, error: 'That line is already on your list.' };
+
+  let sent = false;
+  let drafted = false;
+  try {
+    sent = !!db.prepare(
+      `SELECT 1 FROM keepwarm_runs WHERE status = 'sent' AND lower(subject) = ? LIMIT 1`
+    ).get(key);
+  } catch { /* no runs table yet — nothing has been sent */ }
+  try {
+    drafted = !!db.prepare(
+      `SELECT 1 FROM keepwarm_drafts
+        WHERE lower(subject) = ? AND status IN ('draft', 'approved') AND deleted_at IS NULL LIMIT 1`
+    ).get(key);
+  } catch { /* no drafts table yet */ }
+  if (sent) return { ok: false, error: 'An email with that subject has already been sent. Try different wording.' };
+  if (drafted) return { ok: false, error: 'A draft already has that subject. Try different wording.' };
+
+  // A binned line with these words that never went out is just a discarded
+  // idea. It is removed so the list never holds the same words twice.
+  const drop = db.prepare('DELETE FROM keepwarm_subject_ideas WHERE id = ?');
+  const upd = db.prepare('UPDATE keepwarm_subject_ideas SET text = ? WHERE id = ? AND deleted_at IS NULL');
+  db.transaction(() => {
+    for (const r of others) drop.run(r.id);
+    upd.run(text, idea.id);
+  })();
+  return { ok: true };
+}
+
 /** "These look right" — keep every suggested type as it is and clear the marks. */
 export function confirmSuggestedLanes() {
   const res = db.prepare(`

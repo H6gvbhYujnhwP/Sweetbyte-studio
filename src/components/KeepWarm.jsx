@@ -1404,10 +1404,66 @@ function EmptyNote({ children }) {
 // Lines that have already gone out are hidden — they are kept on the server so
 // the same subject can never be sent twice, but there is no reason to look at
 // them. Lines sitting in a draft stay, greyed.
-function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, busy }) {
+function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, onEditText, busy }) {
   const usable = idea.usable;
   const current = idea.lane || 'general';
   const known = types.some(t => t.key === current);
+
+  // Editing the wording. Local to the row, so typing in one line never
+  // disturbs another. Only unused lines can be edited — see editIdea().
+  const [editing, setEditing] = useState(false);
+  const [draftText, setDraftText] = useState(idea.text);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState(null);
+
+  const startEdit = () => { setDraftText(idea.text); setEditError(null); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setEditError(null); };
+  const saveEdit = async () => {
+    const text = draftText.replace(/\s+/g, ' ').trim();
+    if (!text) { setEditError('The line cannot be empty.'); return; }
+    if (text === idea.text) { setEditing(false); return; }
+    setSaving(true);
+    setEditError(null);
+    const result = await onEditText(idea.id, text);
+    setSaving(false);
+    if (result && result.error) setEditError(result.error);
+    else setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        padding: '7px 12px', borderTop: `1px solid ${BORDER}`, background: '#fcfcfb',
+      }}>
+        <input
+          autoFocus
+          value={draftText}
+          onChange={(e) => setDraftText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); saveEdit(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+          }}
+          aria-label="Subject line wording"
+          maxLength={200}
+          style={{
+            flex: 1, minWidth: 200, fontSize: 13, padding: '6px 9px', fontFamily: 'inherit',
+            border: `1px solid ${SB.primary}`, borderRadius: 6, color: TEXT,
+          }}
+        />
+        <Button tone="primary" disabled={saving} onClick={saveEdit} style={{ padding: '4px 10px', fontSize: 12 }}>
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+        <Button tone="ghost" disabled={saving} onClick={cancelEdit} style={{ padding: '4px 10px', fontSize: 12 }}>
+          Cancel
+        </Button>
+        {editError && (
+          <div style={{ flexBasis: '100%', fontSize: 12, color: DANGER }}>{editError}</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
@@ -1449,6 +1505,14 @@ function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, b
         {!known && <option value={current}>{laneLabel(current)} (no longer used)</option>}
         {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
       </select>
+      <Button
+        tone="ghost"
+        disabled={busy || !usable}
+        onClick={startEdit}
+        style={{ flexShrink: 0, padding: '3px 9px', fontSize: 12 }}
+      >
+        <span title={usable ? 'Change the wording' : 'In a draft — bin or approve that draft first'}>Edit</span>
+      </Button>
       <Button tone="ghost" disabled={busy} onClick={() => onDelete(idea.id)} style={{ flexShrink: 0, padding: '3px 9px', fontSize: 12 }}>
         Bin
       </Button>
@@ -1459,7 +1523,7 @@ function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, b
 function WriteStep({
   count, counts, onCount, onGenerate, generating, canGenerate,
   ideas, picked, onToggleIdea, onBinIdea, ideaBusy, ideaText, onIdeaText, onAddIdeas,
-  laneData, onSetLane, onConfirmTypes, newLane, onNewLane,
+  laneData, onSetLane, onConfirmTypes, newLane, onNewLane, onEditText,
 }) {
   const [foldOpen, setFoldOpen] = useState(false);
   // Which sections are open. General starts open: it is the one most used.
@@ -1611,6 +1675,7 @@ function WriteStep({
                       setOpenSecs(prev => new Set(prev).add(lane));
                       onSetLane(id, lane);
                     }}
+                    onEditText={onEditText}
                     busy={ideaBusy || generating}
                   />
                 ))}
@@ -2883,6 +2948,24 @@ export default function KeepWarm() {
     }
   }
 
+  // Change a line's wording. Returns { error } for the row to show beside the
+  // box, rather than a banner at the top of the page the eye is nowhere near.
+  async function editIdeaText(id, text) {
+    try {
+      const r = await fetch(`/api/keepwarm/subjects/${id}/text`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const d = await r.json();
+      if (!r.ok) return { error: d.error || 'Could not save the change' };
+      setIdeas(d.ideas || []);
+      return { ok: true };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+
   // "These look right" — keep Studio's suggested types.
   async function confirmIdeaLanes() {
     setIdeaBusy(true);
@@ -3418,6 +3501,7 @@ export default function KeepWarm() {
                 onConfirmTypes={confirmIdeaLanes}
                 newLane={ideaLane}
                 onNewLane={setIdeaLane}
+                onEditText={editIdeaText}
               />
 
               {/* ── Steps 2 and 3, and what went last ──────────────────── */}

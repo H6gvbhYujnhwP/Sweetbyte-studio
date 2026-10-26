@@ -90,6 +90,7 @@ import {
   resolveIdeas,
   setIdeaLane,
   confirmSuggestedLanes,
+  editIdea,
 } from '../services/keepwarm-subjects.js';
 import {
   listDead,
@@ -725,6 +726,22 @@ router.put('/subjects/:id', (req, res) => {
     res.json({ ok: true, ideas: listIdeas() });
   } catch (err) {
     console.error('[keepwarm] subject type change failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /subjects/:id/text  { text }
+ * Change the wording of one unused line. Refusals come back as a 409 with a
+ * sentence the screen shows as it is.
+ */
+router.put('/subjects/:id/text', (req, res) => {
+  try {
+    const result = editIdea(req.params.id, (req.body || {}).text);
+    if (!result.ok) return res.status(409).json({ error: result.error });
+    res.json({ ok: true, ideas: listIdeas() });
+  } catch (err) {
+    console.error('[keepwarm] subject edit failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
