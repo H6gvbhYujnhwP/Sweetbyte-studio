@@ -124,6 +124,34 @@ export const ALLOWED_COUNTS = [3, 6, 9];
  * known. A send must always pass one — an unsubscribe link is not decoration
  * on a repeat marketing email, it is the thing that makes sending it lawful.
  */
+// The bullet indent — Billy's choice, October 2026: bullets sit in from the
+// paragraphs, with a hanging indent so a long bullet's second line lines up
+// under its words rather than under the dot, the way Word lays out a list.
+//
+// margin-left moves the whole bullet in; the negative text-indent pulls only
+// the first line (the dot and its space) back out. Pixels rather than em,
+// because Outlook's Word renderer is most reliable with them. 11px is roughly
+// the width of "• " at 11pt Aptos.
+const BULLET_INDENT = 'margin-left:26px;text-indent:-11px;';
+
+/**
+ * Indent every bullet paragraph, at the moment the email is put together.
+ *
+ * Done here rather than stored on the draft, for three reasons. The body
+ * checker insists every stored paragraph carries exactly the house style, so a
+ * different style on bullets would fail it. The editing box rebuilds paragraphs
+ * in the house style on every save, so a stored indent would vanish the first
+ * time a draft was edited. And doing it here means every email — the preview,
+ * a test send and the real send, including ones already approved — gets it,
+ * with nothing to migrate. The plain-text half is untouched.
+ */
+export function indentBullets(bodyHtml) {
+  return String(bodyHtml || '').replace(
+    /<p style="([^"]*)">(\s*•)/g,
+    (_, style, lead) => `<p style="${style}${style.endsWith(';') || !style ? '' : ';'}${BULLET_INDENT}">${lead}`,
+  );
+}
+
 /**
  * Put the examples line just before the body's closing paragraph, so the email
  * shows the work and then ends on the invitation to reply — Billy's choice,
@@ -160,7 +188,7 @@ export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, i
 
   return `<div style="max-width:600px;${FONT}color:#222;">
 ${greeting}
-${withExamplesBeforeClose(bodyHtml, examplesHtml)}
+${withExamplesBeforeClose(indentBullets(bodyHtml), examplesHtml)}
 ${signatureHtml({ inline })}
 ${optOut}
 ${disclaimerHtml()}
