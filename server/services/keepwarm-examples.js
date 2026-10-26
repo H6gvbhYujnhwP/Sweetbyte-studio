@@ -23,7 +23,8 @@
  * than trusted to.
  *
  * WHERE THE LINE SITS
- * Below the body, above the signature. Outside the checked body, so it cannot
+ * Just before the body's closing paragraph (see withExamplesBeforeClose in
+ * keepwarm-generator.js), so the email ends on the invitation to reply. Outside the checked body, so it cannot
  * fail validation, and outside the editing box, so it cannot be mangled when a
  * draft is edited and saved.
  *
@@ -129,9 +130,10 @@ export function laneRequiresExamples(lane) {
 export function examplesFootNote(lane) {
   const wording = laneExampleWording(lane);
   if (!wording || !peekNextExamples(lane).length) return null;
-  return `After the closing paragraph, Studio adds a line linking to ${wording.subject}. `
-    + 'Somewhere in the body, in one short natural phrase, tell the reader there are examples of our work at the bottom of the email so they can see the kind of thing we do. '
-    + 'Do not name any client or business, do not write any address or link, and do not describe the examples.';
+  return `Just before the closing paragraph, Studio adds a line linking to ${wording.subject}. `
+    + 'Earlier in the body, in one short natural phrase, tell the reader there are a couple of examples of our work further down so they can see the kind of thing we do. Do not mention them in the closing paragraph itself. '
+    + 'Do not name any client or business, do not write any address or link, and do not describe the examples. '
+    + 'Do not say they are similar or relevant to the reader\'s business or industry: they are simply work we have done.';
 }
 
 export function laneTakesExamples(lane) {
@@ -338,6 +340,7 @@ RULES
 - Plain, understated, the way one working person writes to another. No marketing language.
 - Do not write ${wording.avoid.map(w => `"${w}"`).join(', ')}.
 - Do not name anybody. Do not write any address, link, http, www or @ sign.
+- Simply say these are examples of work Sweetbyte has done. Say nothing about the reader's business, industry or sector, and do not claim the examples are similar to it or relevant to it: nothing is known about the reader.
 - Reply with the sentence only. No quotation marks, no preamble, no JSON.`;
 }
 
@@ -362,6 +365,13 @@ export function checkLeadSentence(raw) {
   }
   if (/[<>]/.test(value)) return { error: 'The model put markup in the sentence.' };
   if (/[!—]/.test(value)) return { error: 'The sentence came back with an exclamation mark or an em dash in it.' };
+
+  // Nothing is known about the reader's business, so the line may not claim
+  // the examples match it. "Sites we've built for clients in similar
+  // industries" went out on a real draft — Billy just wants to show the work.
+  if (/\bsimilar\b|\bindustr|\bsector|\blike yours\b|\byour (?:business|field|line of work|trade|area)\b|\brelevant\b/i.test(value)) {
+    return { error: 'The sentence claimed the examples match the reader\'s business, which Studio cannot know. Just introduce them as work we have done.' };
+  }
 
   const words = value.split(/\s+/).filter(Boolean);
   if (words.length < LEAD_MIN_WORDS) return { error: 'The sentence came back too short to read as a sentence.' };

@@ -124,6 +124,27 @@ export const ALLOWED_COUNTS = [3, 6, 9];
  * known. A send must always pass one — an unsubscribe link is not decoration
  * on a repeat marketing email, it is the thing that makes sending it lawful.
  */
+/**
+ * Put the examples line just before the body's closing paragraph, so the email
+ * shows the work and then ends on the invitation to reply — Billy's choice,
+ * October 2026. It used to sit after the whole body.
+ *
+ * The line is still never PART of the body: the body is stored and edited
+ * without it, and it is slotted in only here, where the finished email is put
+ * together. That keeps the body checker and the editing box away from links.
+ *
+ * The closing paragraph is the last one in the body. Every generated body ends
+ * on a paragraph (the checker insists), and a hand-edited body still has a
+ * last paragraph. A body with no paragraphs at all gets the line after it.
+ */
+export function withExamplesBeforeClose(bodyHtml, examplesHtml) {
+  const body = String(bodyHtml || '');
+  if (!examplesHtml) return body;
+  const at = body.lastIndexOf('<p');
+  if (at <= 0) return `${body}\n${examplesHtml}`;
+  return `${body.slice(0, at)}${examplesHtml}\n${body.slice(at)}`;
+}
+
 export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, inline = false, examplesHtml = '' }) {
   const greeting = `<p style="${P_STYLE}">Hi ${firstName || 'there'},</p>`;
 
@@ -139,8 +160,7 @@ export function renderEmailHtml({ bodyHtml, unsubUrl = null, firstName = null, i
 
   return `<div style="max-width:600px;${FONT}color:#222;">
 ${greeting}
-${bodyHtml}
-${examplesHtml || ''}
+${withExamplesBeforeClose(bodyHtml, examplesHtml)}
 ${signatureHtml({ inline })}
 ${optOut}
 ${disclaimerHtml()}
