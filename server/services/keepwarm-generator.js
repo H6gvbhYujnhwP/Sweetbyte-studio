@@ -53,6 +53,7 @@ import { signatureHtml, disclaimerHtml } from './email-signature.js';
 import { FONT, P_STYLE, htmlToText, textToHtml } from './email-body-style.js';
 import { KeepWarmEngine, planInterestSlot } from './keepwarm-engine-core.js';
 import { createKeepWarmModel } from './keepwarm-model.js';
+import { patternForInterest } from './keepwarm-engine-patterns.js';
 
 // ── The RAG ──────────────────────────────────────────────────────────────────
 // Read once at module load. It changes between deploys, never between calls,
@@ -320,6 +321,49 @@ export async function generateForInterest({ interestKey, avoid = [], seed } = {}
     subject: String(email.subject).trim().slice(0, 200),
     html:    String(email.html).trim(),
     plain:   typeof email.plain === 'string' ? email.plain.trim() : null,
+  };
+}
+
+// How many lines the Suggest button offers. The screen shows the same two.
+export const SUGGEST_COUNTS = [5, 10];
+
+/**
+ * Suggest subject lines for the operator's own list.
+ *
+ * `lane` is null for General, '__none' for General IT support, or a service
+ * key. The writing brief comes from the same place the service cards and the
+ * General email get theirs, so a Website suggestion is about what a Website
+ * email is about. A type with no brief refuses rather than borrowing another
+ * type's brief.
+ *
+ * Nothing is saved here. The lines come back to the screen, and only the ones
+ * the operator presses Keep on are added to the list, through the ordinary
+ * add-a-line path.
+ */
+export async function suggestSubjectLines({ lane = null, count, typeLabel, audience, examples = [], avoid = [] }) {
+  requireRag();
+  if (!SUGGEST_COUNTS.includes(count)) {
+    throw new Error(`Ask for ${SUGGEST_COUNTS.join(' or ')} lines.`);
+  }
+  // General and General IT support share the general brief; patternForInterest
+  // already maps '__none' to it.
+  const brief = patternForInterest(lane || '__none');
+  if (!brief) throw new Error(`There is no writing brief for "${typeLabel}", so Studio will not suggest lines for it.`);
+
+  const result = await engineFor(`suggest:${lane || 'general'}`).suggestSubjects({
+    knowledgeBase: RAG,
+    count,
+    typeLabel,
+    audience,
+    brief,
+    examples,
+    avoid,
+  });
+
+  return {
+    subjects: result.subjects.map(s => String(s).trim().slice(0, 200)),
+    requested: result.requested,
+    dropped: result.dropped,
   };
 }
 

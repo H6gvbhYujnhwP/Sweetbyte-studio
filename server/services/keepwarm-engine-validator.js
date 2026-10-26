@@ -139,7 +139,45 @@ export function validateSubject(subject, doNotRepeat = []) {
   return errors;
 }
 
-export function validateEmail(email, { knowledgeBase, doNotRepeat = [], fixedSubject = null } = {}) {
+/**
+ * The knowledge-base sections a number is allowed to come from: §3
+ * (positioning) and §7 (packages and pricing). The guardrail in §9 names those
+ * two and no others, so a suggested subject line is held to exactly that.
+ *
+ * If the headings cannot be found the result is empty, which refuses every
+ * number. That is deliberate: a renamed heading must make the check stricter,
+ * never quietly looser.
+ */
+export function statSections(knowledgeBase) {
+  const text = String(knowledgeBase || '');
+  const grab = (n) => {
+    const m = text.match(new RegExp(`^##\\s*${n}\\.[^\\n]*\\n([\\s\\S]*?)(?=^##\\s*\\d+\\.|$(?![\\s\\S]))`, 'm'));
+    return m ? m[1] : '';
+  };
+  return `${grab(3)}\n${grab(7)}`;
+}
+
+/**
+ * A subject line Studio is SUGGESTING for the operator's list.
+ *
+ * Every house rule in validateSubject(), plus the number guardrail: any figure
+ * in the line must appear in §3 or §7 of the knowledge base. The client-name
+ * guardrail is in the prompt only, the same as it is for the emails, because
+ * telling a client's name from any other capitalised word is not something a
+ * pattern can do reliably.
+ */
+export function validateSuggestedSubject(subject, { knowledgeBase, doNotRepeat = [] } = {}) {
+  const errors = validateSubject(subject, doNotRepeat);
+  if (typeof subject === 'string' && subject.trim()) {
+    const allowed = numericTokens(statSections(knowledgeBase));
+    for (const token of numericTokens(stripSubjectPrefix(subject))) {
+      if (!allowed.has(token)) errors.push(`Number ${token} is not in the knowledge base sections that allow figures`);
+    }
+  }
+  return [...new Set(errors)];
+}
+
+export function validateEmail(email,{ knowledgeBase, doNotRepeat = [], fixedSubject = null } = {}) {
   const errors = [];
   if (!email || typeof email !== 'object') return ['Email is not an object'];
   for (const field of ['angle', 'subject', 'html', 'plain']) {

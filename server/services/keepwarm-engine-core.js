@@ -29,6 +29,17 @@
  */
 
 import { CONTENT_PATTERNS, OPENING_MOVES, CTA_MODES, withSubjectPrefix, patternForInterest } from './keepwarm-engine-patterns.js';
+
+// How many extra lines to ask for on top of the number wanted. Some will fail
+// the house rules or land too close to a line that already exists, and asking
+// for a few spare is cheaper than a second round trip.
+const SUGGEST_SPARE = 4;
+// The avoid list shown to the model is capped so a long history does not crowd
+// the prompt. The CODE check below always runs against the full list.
+const SUGGEST_PROMPT_AVOID_CAP = 250;
+// Two calls at most: one, and one top-up if too few passed. A third would
+// mostly produce the same near-misses again.
+const SUGGEST_MAX_CALLS = 2;
 import {
   buildSystemPrompt,
   buildBatchPrompt,
@@ -36,8 +47,12 @@ import {
   buildSubjectRewritePrompt,
   buildBodyRewritePrompt,
   buildFromSubjectPrompt,
+  buildSubjectSuggestSystemPrompt,
+  buildSubjectSuggestPrompt,
 } from './keepwarm-engine-prompts.js';
-import { parseJsonOnly, validateBatch, validateEmail, validateSubject } from './keepwarm-engine-validator.js';
+import {
+  parseJsonOnly, validateBatch, validateEmail, validateSubject, validateSuggestedSubject, similarity,
+} from './keepwarm-engine-validator.js';
 
 function hashString(value) {
   let hash = 2166136261;
@@ -231,6 +246,81 @@ export class KeepWarmEngine {
       }));
     }
     throw new Error('Unreachable validation state');
+  }
+
+  /**
+   * Suggest subject lines for the operator's own list.
+   *
+   * Returns { subjects, requested, dropped }. `subjects` is at most `count`
+   * lines, each carrying the prefix and each passing every house rule. Fewer
+   * than asked for is reported, not padded: a weak line the operator has to
+   * read and turn down is worse than an honest "4 of 5".
+   *
+   * Nothing is repaired. A line that fails is simply discarded and its wording
+   * added to the avoid list for the top-up call, so the model does not offer
+   * the same near-miss twice.
+   */
+  async suggestSubjects({ knowledgeBase, count, typeLabel, audience, brief, examples = [], avoid = [] }) {
+    assertKnowledgeBase(knowledgeBase);
+    if (!Number.isInteger(count) || count < 1 || count > 10) {
+      throw new Error('Ask for between 1 and 10 subject lines.');
+    }
+    if (!brief) throw new Error(`There is no writing brief for "${typeLabel}", so Studio will not suggest lines for it.`);
+
+    // Compared with the prefix on both sides. The operator's own lines are
+    // stored without it, generated subjects with it, and the similarity measure
+    // must see the same thing on each side to mean anything.
+    const blocked = [...new Set(avoid.map(withSubjectPrefix).filter(Boolean))];
+    const kept = [];
+    let dropped = 0;
+
+    for (let call = 0; call < SUGGEST_MAX_CALLS && kept.length < count; call += 1) {
+      const want = count - kept.length;
+      const raw = await this.model.complete({
+        system: buildSubjectSuggestSystemPrompt(),
+        user: buildSubjectSuggestPrompt({
+          knowledgeBase,
+          count: want + SUGGEST_SPARE,
+          typeLabel,
+          audience,
+          brief,
+          examples,
+          avoid: [...kept, ...blocked].slice(0, SUGGEST_PROMPT_AVOID_CAP),
+        }),
+        temperature: 0.9,
+      });
+
+      let parsed;
+      try {
+        parsed = parseJsonOnly(raw);
+      } catch {
+        // A garbled answer on the top-up is not worth losing the first call's
+        // good lines over. On the first call there is nothing to keep.
+        if (kept.length) break;
+        throw new Error('Studio could not read the suggestions that came back. Try again.');
+      }
+      const candidates = Array.isArray(parsed?.subjects) ? parsed.subjects : [];
+
+      for (const item of candidates) {
+        if (kept.length >= count) break;
+        if (typeof item !== 'string' || !item.trim()) { dropped += 1; continue; }
+        const subject = withSubjectPrefix(item.replace(/\s+/g, ' ').trim());
+        const errors = validateSuggestedSubject(subject, { knowledgeBase, doNotRepeat: [...blocked, ...kept] });
+        // validateSubject's similarity check covers the avoid list; this covers
+        // two suggestions in the same box saying the same thing.
+        if (!errors.length && !kept.some(k => similarity(k, subject) >= 0.65)) {
+          kept.push(subject);
+        } else {
+          dropped += 1;
+          blocked.push(subject);
+        }
+      }
+    }
+
+    if (kept.length === 0) {
+      throw new Error('None of the lines Studio came up with passed the house rules or they were all too close to lines you already have. Try again, or try another type.');
+    }
+    return { subjects: kept, requested: count, dropped };
   }
 
   async rewriteSubject({ knowledgeBase, body, currentSubject, rejectedSubjects = [] }) {

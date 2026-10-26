@@ -195,6 +195,63 @@ ${SHAPE_EXAMPLE}
 ${HARD_RULES}`;
 }
 
+/**
+ * Suggest subject lines for the operator's own list — lines only, no bodies.
+ *
+ * Its own system prompt rather than buildSystemPrompt(), because that one is
+ * almost entirely rules about the shape of an email body (bullets, paragraph
+ * styles, word counts). Handing those to a request for one-line subjects only
+ * gives the model rules to misapply.
+ *
+ * The operator's own lines are given as a TONE reference: questions, a bit of
+ * humour, everyday office frustration. The model is told to copy the voice and
+ * never the wording, and the code then refuses anything too close to a line
+ * that already exists, so a near-copy cannot get through even if it tries.
+ */
+export function buildSubjectSuggestSystemPrompt() {
+  return `You write email subject lines for Sweetbyte, an Essex-based managed IT services provider. The emails are light-touch keep-warm notes to small-business owners and office managers who took a telesales call and received an introductory email. Nothing is known about their business.
+
+You are suggesting lines for the operator's own list. The operator will pick the ones they like and an email will later be written underneath each one.
+
+VOICE
+- Match the operator's own lines: chatty, human, often a question, a little gentle humour about everyday IT frustration.
+- Recognisable to anyone who works in an office. Never smug, never alarming, never salesy.
+
+HARD RULES. Every one is mandatory.
+1. Every line begins exactly "${SUBJECT_PREFIX}". What follows the prefix is 48 characters or fewer. Aim for 25 to 45.
+2. No exclamation marks, no em dashes, no emoji, no symbols.
+3. No hype, urgency or promotional words: free, act now, limited time, urgent, guaranteed, exclusive deal, buy now, offer, discount, save money, winner, cash, risk-free.
+4. The knowledge base is the only source of company facts. Do not use any number, statistic, percentage, price or time figure unless it appears in the knowledge base sections on positioning (§3) or packages and pricing (§7). Prefer lines with no numbers at all.
+5. Do not name any client or company unless it appears in the named clients section (§8). Prefer lines that name nobody. Do not give a surname for anyone.
+6. Use UK English. Write Sweetbyte exactly like that.
+7. Do not claim the reader is a customer, and do not refer to a call, earlier conversation or promise.
+8. Copy the operator's voice, never their wording. Every line must be a genuinely new idea, different from every line you are told to avoid and from every other line you return.
+9. Return valid JSON only: {"subjects":["...","..."]}. No markdown fences or commentary.`;
+}
+
+export function buildSubjectSuggestPrompt({ knowledgeBase, count, typeLabel, audience, brief, examples = [], avoid = [] }) {
+  return `Suggest exactly ${count} subject lines for a "${typeLabel}" email.
+
+KNOWLEDGE BASE
+<knowledge_base>
+${knowledgeBase}
+</knowledge_base>
+
+WHO THIS TYPE OF EMAIL GOES TO
+${audience}
+
+WHAT THIS TYPE OF EMAIL IS ABOUT
+${JSON.stringify({ area: brief.label, readerPain: brief.readerPain, usefulPoint: brief.usefulPoint })}
+${typeLabel === 'General' ? '' : `Every line must clearly belong to ${typeLabel}, so it makes sense to someone who showed interest in that and nobody else.\n`}
+THE OPERATOR'S OWN LINES — copy this voice, never this wording
+${examples.length ? examples.map(value => `- ${value}`).join('\n') : '- None yet. Use the voice described above.'}
+
+LINES TO AVOID — already on the list, already used, or already turned down
+${avoid.length ? avoid.map(value => `- ${value}`).join('\n') : '- None'}
+
+Every line begins exactly "${SUBJECT_PREFIX}". Return exactly ${count} lines as {"subjects":[...]}.`;
+}
+
 export function getPattern(id) {
   return CONTENT_PATTERNS.find(pattern => pattern.id === id);
 }

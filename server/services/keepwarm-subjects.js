@@ -237,6 +237,10 @@ export function resolveIdeas(ids = []) {
  */
 // `lane` is the type picked beside the Add box: a lane key, null for General,
 // or 'auto' to let Studio guess each line (marked suggested).
+//
+// The Keep button on a Studio suggestion comes through here too, with the type
+// the operator picked, so a kept line is stored exactly like one they typed:
+// no "suggested" mark and nothing recording that Studio wrote it.
 export function addIdeas(input, lane = 'auto') {
   const lines = String(input || '')
     .split('\n')
@@ -382,6 +386,68 @@ export function editIdea(id, input) {
     upd.run(text, idea.id);
   })();
   return { ok: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// What the Suggest button needs to know
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Enough of the operator's lines to carry their voice without turning the
+// prompt into a copy of the whole list.
+const MAX_EXAMPLES = 30;
+
+/**
+ * The two lists a suggestion run is built from.
+ *
+ *   examples — the operator's own lines of this type, then their General
+ *              lines, as a reference for tone. Binned lines are left out:
+ *              binning one is a sign it is not the voice they want.
+ *   avoid    — every subject Studio must not repeat or land too close to:
+ *              every line ever on the list (binned ones too — a line binned
+ *              once should not come back dressed as a suggestion), every
+ *              draft subject whatever happened to it (rejected ones are the
+ *              clearest "not this"), and every subject on a send.
+ *
+ * Each table read is wrapped for the same reason as listIdeas(): on a brand-new
+ * database another module's table may not exist yet, and a missing table means
+ * there is nothing in it to avoid.
+ */
+export function suggestionContext(lane = null) {
+  const own = db.prepare(`
+    SELECT text, lane FROM keepwarm_subject_ideas
+     WHERE deleted_at IS NULL
+     ORDER BY created_at DESC
+  `).all();
+  const ofType = lane ? own.filter(r => r.lane === lane) : [];
+  const general = own.filter(r => !r.lane);
+  const exampleKeys = new Set();
+  const examples = [];
+  for (const r of [...ofType, ...general]) {
+    const clean = norm(r.text);
+    if (!clean || exampleKeys.has(clean.toLowerCase())) continue;
+    exampleKeys.add(clean.toLowerCase());
+    examples.push(clean);
+    if (examples.length >= MAX_EXAMPLES) break;
+  }
+
+  const texts = db.prepare('SELECT text FROM keepwarm_subject_ideas').all().map(r => r.text);
+  try {
+    texts.push(...db.prepare('SELECT subject FROM keepwarm_drafts').all().map(r => r.subject));
+  } catch { /* no drafts table yet */ }
+  try {
+    texts.push(...db.prepare('SELECT subject FROM keepwarm_runs').all().map(r => r.subject));
+  } catch { /* no runs table yet */ }
+
+  const seen = new Set();
+  const avoid = [];
+  for (const t of texts) {
+    const clean = norm(t);
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    avoid.push(clean);
+  }
+  return { examples, avoid };
 }
 
 /** "These look right" — keep every suggested type as it is and clear the marks. */

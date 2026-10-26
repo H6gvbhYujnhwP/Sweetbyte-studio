@@ -1520,10 +1520,149 @@ function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, o
   );
 }
 
+// ── Suggest lines ───────────────────────────────────────────────────────────
+//
+// Sits inside "Use my own subject lines". Studio offers a handful of new lines
+// in the operator's voice for one type; nothing is saved until Keep is pressed,
+// and a kept line goes onto the list exactly as if it had been typed in the
+// Add box, under the type picked here. Leaving the page clears the box.
+//
+// `shown` remembers every line offered this sitting, including the ones turned
+// down, and is sent with the next request so pressing Suggest again brings new
+// lines rather than the same ones.
+function SuggestLines({ types, disabled, onSuggest, onKeep, onKept }) {
+  const [lane, setLane]       = useState('general');
+  const [howMany, setHowMany] = useState(5);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
+  const [items, setItems]     = useState([]);   // { text, state: 'new' | 'kept' | 'already' }
+  const [forLane, setForLane] = useState('general');
+  const [note, setNote]       = useState(null);
+  const [shown, setShown]     = useState([]);
+  const [keeping, setKeeping] = useState(false);
+
+  const labelOf = (key) => (types.find(t => t.key === key) || {}).label || laneLabel(key);
+  const waiting = items.filter(i => i.state === 'new');
+
+  const suggest = async () => {
+    setLoading(true);
+    setError(null);
+    setNote(null);
+    const result = await onSuggest(lane, howMany, shown);
+    setLoading(false);
+    if (result.error) { setError(result.error); return; }
+    const lines = result.suggestions || [];
+    setItems(lines.map(text => ({ text, state: 'new' })));
+    setForLane(lane);
+    setNote(result.note || null);
+    setShown(prev => [...prev, ...lines]);
+  };
+
+  const keep = async (texts) => {
+    if (!texts.length) return;
+    setKeeping(true);
+    setError(null);
+    const result = await onKeep(texts, forLane);
+    setKeeping(false);
+    if (result.error) { setError(result.error); return; }
+    // The add path skips a line that is already on the list. With one line
+    // that can only mean it is a duplicate; with several the server does not
+    // say which, so all are shown as kept — they are on the list either way.
+    const dup = texts.length === 1 && result.added === 0;
+    setItems(prev => prev.map(i => (texts.includes(i.text) ? { ...i, state: dup ? 'already' : 'kept' } : i)));
+    onKept(forLane);
+  };
+
+  const noThanks = (text) => setItems(prev => prev.filter(i => i.text !== text));
+  const close = () => { setItems([]); setNote(null); setError(null); };
+
+  const selectStyle = {
+    fontSize: 13, padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 7,
+    fontFamily: 'inherit', background: CARD,
+  };
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        background: '#fafaf8', border: `1px solid ${BORDER}`, borderRadius: 8, padding: '9px 12px',
+      }}>
+        <span style={{ fontSize: 13, color: TEXT }}><b>Need ideas?</b> Suggest</span>
+        <select value={howMany} onChange={(e) => setHowMany(Number(e.target.value))}
+          aria-label="How many lines to suggest" style={selectStyle} disabled={loading}>
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+        </select>
+        <span style={{ fontSize: 13, color: TEXT }}>lines for</span>
+        <select value={lane} onChange={(e) => setLane(e.target.value)}
+          aria-label="Which type of email to suggest lines for" style={{ ...selectStyle, maxWidth: 220 }} disabled={loading}>
+          {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+        </select>
+        <Button tone="primary" disabled={disabled || loading || keeping} onClick={suggest}
+          style={{ padding: '5px 11px', fontSize: 12.5 }}>
+          {loading ? 'Thinking…' : 'Suggest lines'}
+        </Button>
+        <span style={{ flexBasis: '100%', fontSize: 11.5, color: TERTIARY }}>
+          Written in the style of your own lines, within the house rules. Takes about 15 seconds.
+        </span>
+      </div>
+
+      {error && <div style={{ fontSize: 12, color: DANGER, marginTop: 6 }}>{error}</div>}
+
+      {items.length > 0 && (
+        <div style={{ border: `1px solid ${SB.primary}`, borderRadius: 8, marginTop: 8, overflow: 'hidden' }}>
+          <div style={{ background: SB.tint, color: SB.dark, padding: '9px 12px', fontSize: 12.5, lineHeight: 1.45 }}>
+            <b>{items.length} {items.length === 1 ? 'suggestion' : 'suggestions'} for {labelOf(forLane)}.</b>{' '}
+            Nothing is saved until you press Keep. Leaving the page clears them.
+            {note && <div style={{ marginTop: 3, color: MUTED }}>{note}</div>}
+          </div>
+          {items.map(i => (
+            <div key={i.text} style={{
+              display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+              padding: '7px 12px', borderTop: `1px solid ${BORDER}`, fontSize: 13,
+              opacity: i.state === 'new' ? 1 : 0.6,
+            }}>
+              <span style={{ flex: 1, minWidth: 200, color: TEXT, overflowWrap: 'anywhere' }}>{i.text}</span>
+              {i.state === 'new' && (
+                <>
+                  <Button tone="primary" disabled={keeping} onClick={() => keep([i.text])}
+                    style={{ padding: '3px 10px', fontSize: 12 }}>Keep</Button>
+                  <Button tone="ghost" disabled={keeping} onClick={() => noThanks(i.text)}
+                    style={{ padding: '3px 9px', fontSize: 12 }}>No thanks</Button>
+                </>
+              )}
+              {i.state === 'kept' && (
+                <span style={{ fontSize: 12, color: GOOD }}>✓ Kept — now in {labelOf(forLane)}</span>
+              )}
+              {i.state === 'already' && (
+                <span style={{ fontSize: 12, color: MUTED }}>Already on your list</span>
+              )}
+            </div>
+          ))}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+            padding: '8px 12px', borderTop: `1px solid ${BORDER}`,
+          }}>
+            <Button disabled={keeping || waiting.length === 0} onClick={() => keep(waiting.map(i => i.text))}
+              style={{ padding: '4px 10px', fontSize: 12 }}>
+              {keeping ? 'Saving…' : 'Keep all'}
+            </Button>
+            <span style={{ marginRight: 'auto' }} />
+            <Button tone="ghost" disabled={keeping} onClick={close} style={{ padding: '3px 9px', fontSize: 12 }}>
+              Close
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WriteStep({
   count, counts, onCount, onGenerate, generating, canGenerate,
   ideas, picked, onToggleIdea, onBinIdea, ideaBusy, ideaText, onIdeaText, onAddIdeas,
   laneData, onSetLane, onConfirmTypes, newLane, onNewLane, onEditText,
+  onSuggest, onKeepSuggested,
 }) {
   const [foldOpen, setFoldOpen] = useState(false);
   // Which sections are open. General starts open: it is the one most used.
@@ -1610,13 +1749,25 @@ function WriteStep({
         </span>
       </button>
 
-      {foldOpen && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, lineHeight: 1.5 }}>
-            Tick a line and Studio writes an email around it, word for word. A line in a service
-            section becomes an email for that service, and only goes to the people ticked for it.
-          </div>
+      {/* Always mounted, only hidden when the fold is shut, so closing the fold
+          does not throw away suggestions that have not been looked at yet. */}
+      <div style={{ marginTop: 8, display: foldOpen ? 'block' : 'none' }}>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 8, lineHeight: 1.5 }}>
+          Tick a line and Studio writes an email around it, word for word. A line in a service
+          section becomes an email for that service, and only goes to the people ticked for it.
+        </div>
 
+        <SuggestLines
+          types={types}
+          disabled={!canGenerate || generating}
+          onSuggest={onSuggest}
+          onKeep={onKeepSuggested}
+          onKept={(lane) => setOpenSecs(prev => new Set(prev).add(lane))}
+        />
+      </div>
+
+      {foldOpen && (
+        <div>
           {anySuggested && (
             <div style={{
               display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
@@ -2928,6 +3079,44 @@ export default function KeepWarm() {
     }
   }
 
+  // Ask Studio for subject-line suggestions. Saves nothing — see SuggestLines.
+  // Returns { suggestions, note } or { error } for the box to show in place.
+  async function suggestIdeaLines(lane, count, avoid) {
+    try {
+      const r = await fetch('/api/keepwarm/subjects/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lane, count, avoid }),
+      });
+      const d = await r.json();
+      if (!r.ok) return { error: d.error || 'Could not suggest lines' };
+      return d;
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+
+  // Keep one or more suggestions. The same add path as the Add box, with the
+  // type picked in the Suggest bar, so a kept line is an ordinary line.
+  async function keepSuggestedLines(texts, lane) {
+    setIdeaBusy(true);
+    try {
+      const r = await fetch('/api/keepwarm/subjects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: texts.join('\n'), lane }),
+      });
+      const d = await r.json();
+      if (!r.ok) return { error: d.error || 'Could not keep that line' };
+      setIdeas(d.ideas || []);
+      return { added: d.added, skipped: d.skipped };
+    } catch (err) {
+      return { error: err.message };
+    } finally {
+      setIdeaBusy(false);
+    }
+  }
+
   // Move a subject line to another type ('general' or a service key).
   async function changeIdeaLane(id, lane) {
     setIdeaBusy(true);
@@ -3502,6 +3691,8 @@ export default function KeepWarm() {
                 newLane={ideaLane}
                 onNewLane={setIdeaLane}
                 onEditText={editIdeaText}
+                onSuggest={suggestIdeaLines}
+                onKeepSuggested={keepSuggestedLines}
               />
 
               {/* ── Steps 2 and 3, and what went last ──────────────────── */}

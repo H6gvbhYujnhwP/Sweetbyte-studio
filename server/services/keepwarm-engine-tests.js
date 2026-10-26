@@ -480,3 +480,156 @@ test('the general email still covers IT support', () => {
   const slot = planInterestSlot({ interestKey: '__none', seed: '2026-09-17' });
   assert.match(slot.angle, /IT support/i);
 });
+
+// ── Subject-line suggestions ────────────────────────────────────────────────
+//
+// The Suggest button on the operator's own list. Lines only, no bodies. Each
+// test hands the engine a fake model with prepared answers and checks what the
+// code lets through, because the code check — not the prompt — is what keeps a
+// bad line off the screen.
+
+const suggestKb = `${'Sweetbyte provides managed IT support, websites, apps, cyber security and Microsoft 365. '.repeat(8)}
+## 3. Positioning and differentiators
+We have looked after Essex businesses for 25 years.
+## 4. Company values
+We answer within 30 minutes.
+## 7. Packages and pricing
+Plans start at 49 a month.
+## 8. Named clients and case studies
+Example client.
+`;
+
+const suggestArgs = {
+  knowledgeBase: suggestKb,
+  typeLabel: 'General',
+  audience: 'Everyone in the loop.',
+  brief: patternForInterest('__none'),
+};
+
+function suggestModel(answers) {
+  const calls = [];
+  return {
+    calls,
+    async complete(request) {
+      calls.push(request);
+      const next = answers.shift();
+      return typeof next === 'string' ? next : JSON.stringify(next);
+    },
+  };
+}
+
+test('suggest: good lines come back with the prefix, bad ones are dropped', async () => {
+  const model = suggestModel([{ subjects: [
+    'Who fixes the IT when you are the IT?',                         // no prefix: gets one
+    `${SUBJECT_PREFIX}Does your laptop need a lie down too?`,
+    `${SUBJECT_PREFIX}Your IT is broken!`,                            // exclamation mark
+    `${SUBJECT_PREFIX}Free IT health check this week`,                // spammy
+    `${SUBJECT_PREFIX}This one is far too long to fit in an inbox preview line`, // > 48
+    `${SUBJECT_PREFIX}Is your printer plotting something? 😂`,        // emoji
+    `${SUBJECT_PREFIX}When did your server last get a day off?`,
+  ] }]);
+  const engine = new KeepWarmEngine(model);
+  const out = await engine.suggestSubjects({ ...suggestArgs, count: 3 });
+  assert.deepEqual(out.subjects, [
+    `${SUBJECT_PREFIX}Who fixes the IT when you are the IT?`,
+    `${SUBJECT_PREFIX}Does your laptop need a lie down too?`,
+    `${SUBJECT_PREFIX}When did your server last get a day off?`,
+  ]);
+  assert.equal(model.calls.length, 1);
+});
+
+test('suggest: nothing repeats the list, a sent subject or a near-copy of one', async () => {
+  const model = suggestModel([{ subjects: [
+    `${SUBJECT_PREFIX}Has your printer won the argument today?`,     // exact copy of an own line
+    `${SUBJECT_PREFIX}Has your printer won the argument again?`,     // near-copy
+    `${SUBJECT_PREFIX}Safer passwords`,                               // already sent
+    `${SUBJECT_PREFIX}Is your Wi-Fi shy in the back office?`,
+  ] }, { subjects: [] }]);
+  const engine = new KeepWarmEngine(model);
+  const out = await engine.suggestSubjects({
+    ...suggestArgs,
+    count: 5,
+    // Own lines are stored without the prefix, sent subjects with it.
+    avoid: ['Has your printer won the argument today?', `${SUBJECT_PREFIX}Safer passwords`],
+  });
+  assert.deepEqual(out.subjects, [`${SUBJECT_PREFIX}Is your Wi-Fi shy in the back office?`]);
+  assert.equal(out.dropped, 3);
+});
+
+test('suggest: two suggestions saying the same thing only one survives', async () => {
+  const model = suggestModel([{ subjects: [
+    `${SUBJECT_PREFIX}Does your laptop need a lie down too?`,
+    `${SUBJECT_PREFIX}Does your laptop need a lie down?`,
+  ] }, { subjects: [] }]);
+  const out = await new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 5 });
+  assert.equal(out.subjects.length, 1);
+});
+
+test('suggest: numbers only from §3 and §7 of the knowledge base', async () => {
+  const model = suggestModel([{ subjects: [
+    `${SUBJECT_PREFIX}25 years of fixing printers`,                   // §3: allowed
+    `${SUBJECT_PREFIX}IT support from 49 a month`,                    // §7: allowed
+    `${SUBJECT_PREFIX}Answers within 30 minutes`,                     // §4: not allowed
+    `${SUBJECT_PREFIX}99.9% of offices have this problem`,            // invented
+  ] }, { subjects: [] }]);
+  const out = await new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 5 });
+  assert.deepEqual(out.subjects, [
+    `${SUBJECT_PREFIX}25 years of fixing printers`,
+    `${SUBJECT_PREFIX}IT support from 49 a month`,
+  ]);
+});
+
+test('suggest: tops up once when too few pass, and tells the model what failed', async () => {
+  const model = suggestModel([
+    { subjects: [`${SUBJECT_PREFIX}Who fixes the IT when you are the IT?`, `${SUBJECT_PREFIX}Act now!`] },
+    { subjects: [`${SUBJECT_PREFIX}Is your Wi-Fi shy in the back office?`] },
+  ]);
+  const out = await new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 2 });
+  assert.equal(out.subjects.length, 2);
+  assert.equal(model.calls.length, 2);
+  assert.match(model.calls[1].user, /Who fixes the IT when you are the IT\?/);
+  assert.match(model.calls[1].user, /Act now!/);
+});
+
+test('suggest: never more than two calls, and never pads', async () => {
+  const model = suggestModel([
+    { subjects: [`${SUBJECT_PREFIX}Who fixes the IT when you are the IT?`] },
+    { subjects: [] },
+    { subjects: [`${SUBJECT_PREFIX}Should never be read`] },
+  ]);
+  const out = await new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 5 });
+  assert.equal(out.subjects.length, 1);
+  assert.equal(model.calls.length, 2);
+});
+
+test('suggest: refuses in plain words when nothing passes', async () => {
+  const model = suggestModel([{ subjects: [`${SUBJECT_PREFIX}Act now!`] }, { subjects: ['Buy now'] }]);
+  await assert.rejects(
+    new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 5 }),
+    /None of the lines Studio came up with passed/,
+  );
+});
+
+test('suggest: the operator\'s lines go in as tone examples and the brief matches the type', async () => {
+  const model = suggestModel([{ subjects: [`${SUBJECT_PREFIX}Is your website hiding from Google?`] }, { subjects: [] }]);
+  await new KeepWarmEngine(model).suggestSubjects({
+    ...suggestArgs,
+    count: 5,
+    typeLabel: 'Website',
+    brief: patternForInterest('website'),
+    examples: ['Has your printer won the argument today?'],
+  });
+  const prompt = model.calls[0].user;
+  assert.match(prompt, /copy this voice, never this wording\n- Has your printer won the argument today\?/);
+  assert.match(prompt, /must clearly belong to Website/);
+  assert.match(prompt, /Suggest exactly 9 subject lines/); // 5 + 4 spare
+});
+
+test('statSections finds §3 and §7 and nothing else', async () => {
+  const { statSections } = await import('./keepwarm-engine-validator.js');
+  const s = statSections(suggestKb);
+  assert.match(s, /25 years/);
+  assert.match(s, /49 a month/);
+  assert.doesNotMatch(s, /30 minutes/);
+  assert.equal(statSections('no headings here').trim(), '');
+});

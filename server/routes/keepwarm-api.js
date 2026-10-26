@@ -69,6 +69,8 @@ import {
   textToHtml,
   ragLoaded,
   ALLOWED_COUNTS,
+  suggestSubjectLines,
+  SUGGEST_COUNTS,
 } from '../services/keepwarm-generator.js';
 import {
   getLaneExamples,
@@ -91,6 +93,7 @@ import {
   setIdeaLane,
   confirmSuggestedLanes,
   editIdea,
+  suggestionContext,
 } from '../services/keepwarm-subjects.js';
 import {
   listDead,
@@ -756,6 +759,74 @@ router.post('/subjects/confirm-types', (_req, res) => {
     res.json({ ok: true, ideas: listIdeas() });
   } catch (err) {
     console.error('[keepwarm] subject type confirm failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /subjects/suggest  { lane, count, avoid }
+ *
+ *   lane  — 'general', '__none' (General IT support) or a service key
+ *   count — 5 or 10
+ *   avoid — lines already shown in the suggestion box this sitting, including
+ *           ones the operator said No thanks to, so pressing Suggest again
+ *           brings new ones. Optional.
+ *
+ * Saves nothing. The lines come back for the screen to show; a line only
+ * reaches the list when the operator presses Keep, which goes through the
+ * ordinary POST /subjects above with the same type.
+ *
+ * Runs inline for the same reason /generate does: the operator is watching
+ * the screen and it takes seconds, not minutes.
+ */
+router.post('/subjects/suggest', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const count = Number(body.count);
+    if (!SUGGEST_COUNTS.includes(count)) {
+      return res.status(400).json({ error: `Ask for ${SUGGEST_COUNTS.join(' or ')} lines.` });
+    }
+    const raw = body.lane;
+    const lane = raw === 'general' || raw === null || raw === undefined || raw === '' ? null : String(raw);
+    if (lane !== null && !isLaneKey(lane)) {
+      return res.status(400).json({ error: 'That is not an email type Studio knows.' });
+    }
+
+    const typeLabel = lane === null ? 'General'
+      : lane === '__none' ? 'General IT support'
+      : interestLabelFor(lane);
+    const audience = lane === null
+      ? 'Everyone in the keep-warm loop, whatever services they have shown interest in.'
+      : lane === '__none'
+        ? 'People who have not shown interest in any particular service. They get the general IT support email.'
+        : `Only people who have shown interest in ${typeLabel}.`;
+
+    const sitting = (Array.isArray(body.avoid) ? body.avoid : [])
+      .map(x => String(x || '').trim())
+      .filter(Boolean)
+      .slice(0, 200);
+
+    const { examples, avoid } = suggestionContext(lane);
+    const result = await suggestSubjectLines({
+      lane,
+      count,
+      typeLabel,
+      audience,
+      examples,
+      avoid: [...avoid, ...sitting],
+    });
+
+    const got = result.subjects.length;
+    res.json({
+      suggestions: result.subjects,
+      requested: count,
+      lane: lane || 'general',
+      note: got < count
+        ? `${got} of ${count}. The rest broke the house rules or were too close to lines you already have.`
+        : null,
+    });
+  } catch (err) {
+    console.error('[keepwarm] subject suggest failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
