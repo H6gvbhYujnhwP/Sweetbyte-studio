@@ -501,7 +501,7 @@ Example client.
 
 const suggestArgs = {
   knowledgeBase: suggestKb,
-  typeLabel: 'General',
+  typeLabel: 'General IT support',
   audience: 'Everyone in the loop.',
   brief: patternForInterest('__none'),
 };
@@ -632,4 +632,10 @@ test('statSections finds §3 and §7 and nothing else', async () => {
   assert.match(s, /49 a month/);
   assert.doesNotMatch(s, /30 minutes/);
   assert.equal(statSections('no headings here').trim(), '');
+});
+
+test('suggest: General IT support lines are not told to belong to a service', async () => {
+  const model = suggestModel([{ subjects: [`${SUBJECT_PREFIX}Who fixes the IT when you are the IT?`] }, { subjects: [] }]);
+  await new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 5 });
+  assert.doesNotMatch(model.calls[0].user, /must clearly belong to/);
 });

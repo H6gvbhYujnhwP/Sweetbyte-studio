@@ -146,6 +146,32 @@ try {
   console.error('[keepwarm] lane column migration failed:', err.message);
 }
 
+// ONE GENERAL EMAIL, NOT TWO — Billy's decision, October 2026.
+//
+// There used to be a "General" email (no lane, sent to everyone in the loop)
+// as well as the General IT support lane ('__none': nothing ticked, or every
+// ticked topic already had). Everyone gets one keep-warm email a fortnight, so
+// a General email sent first used up the fortnight of everybody ticked for a
+// service and they missed their topic. Now there is only General IT support.
+//
+// Every draft that has not gone out and carries no lane is moved onto it —
+// waiting, approved and binned alike, so nothing is left behind in a type the
+// screen no longer shows. Sent drafts keep no lane: that is what they were
+// when they went, and the history should say so.
+//
+// Runs on every start and does nothing once there is nothing left to move.
+// Nothing writes a lane-less draft any more, and the sender treats one as
+// General IT support anyway, so this is tidying rather than the only guard.
+try {
+  const moved = db.prepare(`
+    UPDATE keepwarm_drafts SET interest = '__none'
+     WHERE interest IS NULL AND status <> 'sent'
+  `).run().changes;
+  if (moved) console.log(`[keepwarm] moved ${moved} General draft(s) onto General IT support`);
+} catch (err) {
+  console.error('[keepwarm] General → General IT support draft move failed:', err.message);
+}
+
 // Addresses put into the loop by hand.
 //
 // The loop is otherwise derived from service_email_sends: to be in it, Studio
@@ -1513,7 +1539,9 @@ export function listDrafts({ status = null, limit = 100, interest = null } = {})
   // lane at all. Spelled as a word rather than passing null, because a missing
   // query parameter and a deliberate request for the general ones are different
   // questions and must not collapse into the same answer.
-  if (interest === 'general') clauses.push('interest IS NULL');
+  // Since the merge, 'general' means General IT support. Lane-less drafts that
+  // are left are sent history only.
+  if (interest === 'general') clauses.push(`(interest = '__none' OR interest IS NULL)`);
   else if (interest) { clauses.push('interest = ?'); params.push(interest); }
   params.push(limit);
 

@@ -330,8 +330,7 @@ export const SUGGEST_COUNTS = [5, 10];
 /**
  * Suggest subject lines for the operator's own list.
  *
- * `lane` is null for General, '__none' for General IT support, or a service
- * key. The writing brief comes from the same place the service cards and the
+ * `lane` is '__none' for General IT support, or a service key. The writing brief comes from the same place the service cards and the
  * General email get theirs, so a Website suggestion is about what a Website
  * email is about. A type with no brief refuses rather than borrowing another
  * type's brief.
@@ -340,17 +339,17 @@ export const SUGGEST_COUNTS = [5, 10];
  * the operator presses Keep on are added to the list, through the ordinary
  * add-a-line path.
  */
-export async function suggestSubjectLines({ lane = null, count, typeLabel, audience, examples = [], avoid = [] }) {
+export async function suggestSubjectLines({ lane = '__none', count, typeLabel, audience, examples = [], avoid = [] }) {
   requireRag();
   if (!SUGGEST_COUNTS.includes(count)) {
     throw new Error(`Ask for ${SUGGEST_COUNTS.join(' or ')} lines.`);
   }
-  // General and General IT support share the general brief; patternForInterest
-  // already maps '__none' to it.
+  // General IT support uses the general brief; patternForInterest maps '__none'
+  // to it.
   const brief = patternForInterest(lane || '__none');
   if (!brief) throw new Error(`There is no writing brief for "${typeLabel}", so Studio will not suggest lines for it.`);
 
-  const result = await engineFor(`suggest:${lane || 'general'}`).suggestSubjects({
+  const result = await engineFor(`suggest:${lane || '__none'}`).suggestSubjects({
     knowledgeBase: RAG,
     count,
     typeLabel,

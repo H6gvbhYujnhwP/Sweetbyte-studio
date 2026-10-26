@@ -242,7 +242,7 @@ ${audience}
 
 WHAT THIS TYPE OF EMAIL IS ABOUT
 ${JSON.stringify({ area: brief.label, readerPain: brief.readerPain, usefulPoint: brief.usefulPoint })}
-${typeLabel === 'General' ? '' : `Every line must clearly belong to ${typeLabel}, so it makes sense to someone who showed interest in that and nobody else.\n`}
+${typeLabel === 'General IT support' ? '' : `Every line must clearly belong to ${typeLabel}, so it makes sense to someone who showed interest in that and nobody else.\n`}
 THE OPERATOR'S OWN LINES — copy this voice, never this wording
 ${examples.length ? examples.map(value => `- ${value}`).join('\n') : '- None yet. Use the voice described above.'}
 

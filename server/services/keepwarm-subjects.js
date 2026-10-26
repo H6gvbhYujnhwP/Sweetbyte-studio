@@ -63,9 +63,11 @@ const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 // Which kind of email a line is for
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Every line now carries a type: NULL for a General email (everyone in the
-// loop), or a service-lane key such as 'website'. Ticking a Website line writes
-// a Website email that only goes to the Website people.
+// Every line carries a type: '__none' for a General IT support email (nothing
+// ticked, or every ticked topic already had), or a service-lane key such as
+// 'website'. Ticking a Website line writes a Website email that only goes to
+// the Website people. NULL used to mean an "everyone" General email; that type
+// was merged into General IT support and the lines moved across.
 //
 // `lane_suggested` = 1 means Studio guessed the type from the wording and the
 // operator has not looked at it yet. The screen marks those "suggested" until
@@ -109,6 +111,20 @@ try {
   }
 } catch (err) {
   console.error('[keepwarm] subject line type migration failed:', err.message);
+}
+
+// The General type was merged into General IT support (see keepwarm-store.js).
+// Lines that were General move across, binned ones too, so restoring a binned
+// line can never bring back a type the screen no longer has. A line Studio
+// had only guessed was General keeps its "suggested" mark, because nobody has
+// looked at it yet. Does nothing once every line has a type.
+try {
+  const moved = db.prepare(
+    `UPDATE keepwarm_subject_ideas SET lane = '__none' WHERE lane IS NULL`
+  ).run().changes;
+  if (moved) console.log(`[keepwarm] moved ${moved} General subject line(s) onto General IT support`);
+} catch (err) {
+  console.error('[keepwarm] General → General IT support line move failed:', err.message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,8 +182,10 @@ export function listIdeas() {
     text:    r.text,
     state:   r.sent ? 'sent' : (r.in_drafts ? 'in drafts' : 'unused'),
     usable:  !r.sent && !r.in_drafts,
-    // null = General. Otherwise a service-lane key.
-    lane:      r.lane || null,
+    // '__none' = General IT support. Otherwise a service-lane key. A line that
+    // somehow still has none is shown as General IT support, which is how it
+    // would be sent.
+    lane:      r.lane || '__none',
     suggested: !!r.lane_suggested,
   }));
 }
@@ -211,7 +229,7 @@ export function resolveIdeas(ids = []) {
       };
     }
     subjects.push(idea.text);
-    lines.push({ text: idea.text, lane: idea.lane });
+    lines.push({ text: idea.text, lane: idea.lane || '__none' });
   }
 
   return { subjects, lines, error: null };
@@ -235,8 +253,9 @@ export function resolveIdeas(ids = []) {
  * possible. A binned line that never went out is a change of mind rather than
  * history, so pasting it back restores it.
  */
-// `lane` is the type picked beside the Add box: a lane key, null for General,
-// or 'auto' to let Studio guess each line (marked suggested).
+// `lane` is the type picked beside the Add box: a lane key ('__none' for
+// General IT support), or 'auto' to let Studio guess each line (marked
+// suggested). A line Studio cannot place is General IT support.
 //
 // The Keep button on a Studio suggestion comes through here too, with the type
 // the operator picked, so a kept line is stored exactly like one they typed:
@@ -278,7 +297,7 @@ export function addIdeas(input, lane = 'auto') {
     'INSERT INTO keepwarm_subject_ideas (id, text, lane, lane_suggested) VALUES (?, ?, ?, ?)'
   );
   const auto = lane === 'auto';
-  const laneFor = (text) => (auto ? suggestLane(text) : (lane || null));
+  const laneFor = (text) => (auto ? suggestLane(text) : lane) || '__none';
   const restore = db.prepare(
     'UPDATE keepwarm_subject_ideas SET deleted_at = NULL WHERE id = ?'
   );
@@ -324,7 +343,7 @@ export function setIdeaLane(id, lane) {
     UPDATE keepwarm_subject_ideas
        SET lane = ?, lane_suggested = 0
      WHERE id = ? AND deleted_at IS NULL
-  `).run(lane || null, String(id || ''));
+  `).run(lane || '__none', String(id || ''));
   return { ok: !!res.changes };
 }
 
@@ -399,8 +418,8 @@ const MAX_EXAMPLES = 30;
 /**
  * The two lists a suggestion run is built from.
  *
- *   examples — the operator's own lines of this type, then their General
- *              lines, as a reference for tone. Binned lines are left out:
+ *   examples — the operator's own lines of this type, then their General IT
+ *              support lines, as a reference for tone. Binned lines are left out:
  *              binning one is a sign it is not the voice they want.
  *   avoid    — every subject Studio must not repeat or land too close to:
  *              every line ever on the list (binned ones too — a line binned
@@ -412,14 +431,17 @@ const MAX_EXAMPLES = 30;
  * database another module's table may not exist yet, and a missing table means
  * there is nothing in it to avoid.
  */
-export function suggestionContext(lane = null) {
+export function suggestionContext(lane = '__none') {
+  const type = lane || '__none';
   const own = db.prepare(`
     SELECT text, lane FROM keepwarm_subject_ideas
      WHERE deleted_at IS NULL
      ORDER BY created_at DESC
   `).all();
-  const ofType = lane ? own.filter(r => r.lane === lane) : [];
-  const general = own.filter(r => !r.lane);
+  const ofType = own.filter(r => (r.lane || '__none') === type);
+  // General IT support lines are the operator's general voice, so they back up
+  // a service type that has few lines of its own.
+  const general = type === '__none' ? [] : own.filter(r => (r.lane || '__none') === '__none');
   const exampleKeys = new Set();
   const examples = [];
   for (const r of [...ofType, ...general]) {

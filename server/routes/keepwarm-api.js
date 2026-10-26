@@ -695,13 +695,15 @@ router.get('/subjects', (req, res) => {
 router.post('/subjects', (req, res) => {
   try {
     // `lane` is the type picked beside the Add box: 'auto' (Studio guesses),
-    // 'general', or a service-lane key. Anything else is refused rather than
-    // stored, so a line can never carry a type the generator does not know.
+    // '__none' (General IT support), or a service-lane key. Anything else is
+    // refused rather than stored, so a line can never carry a type the
+    // generator does not know. 'general' or nothing is read as General IT
+    // support, which is the only general type since the merge.
     const raw = (req.body || {}).lane;
     const lane = raw === undefined || raw === 'auto' ? 'auto'
-      : raw === 'general' || raw === null ? null
+      : raw === 'general' || raw === null || raw === '' ? '__none'
       : String(raw);
-    if (lane !== 'auto' && lane !== null && !isLaneKey(lane)) {
+    if (lane !== 'auto' && !isLaneKey(lane)) {
       return res.status(400).json({ error: 'That is not an email type Studio knows.' });
     }
     const result = addIdeas((req.body || {}).text, lane);
@@ -714,14 +716,14 @@ router.post('/subjects', (req, res) => {
 });
 
 /**
- * PUT /subjects/:id  { lane }   — 'general' or a service-lane key
+ * PUT /subjects/:id  { lane }   — '__none' (General IT support) or a service-lane key
  * Move one line to another type. Clears its "suggested" mark.
  */
 router.put('/subjects/:id', (req, res) => {
   try {
     const raw = (req.body || {}).lane;
-    const lane = raw === 'general' || raw === null || raw === undefined ? null : String(raw);
-    if (lane !== null && !isLaneKey(lane)) {
+    const lane = raw === 'general' || raw === null || raw === undefined || raw === '' ? '__none' : String(raw);
+    if (!isLaneKey(lane)) {
       return res.status(400).json({ error: 'That is not an email type Studio knows.' });
     }
     const result = setIdeaLane(req.params.id, lane);
@@ -766,7 +768,7 @@ router.post('/subjects/confirm-types', (_req, res) => {
 /**
  * POST /subjects/suggest  { lane, count, avoid }
  *
- *   lane  — 'general', '__none' (General IT support) or a service key
+ *   lane  — '__none' (General IT support) or a service key
  *   count — 5 or 10
  *   avoid — lines already shown in the suggestion box this sitting, including
  *           ones the operator said No thanks to, so pressing Suggest again
@@ -787,19 +789,15 @@ router.post('/subjects/suggest', async (req, res) => {
       return res.status(400).json({ error: `Ask for ${SUGGEST_COUNTS.join(' or ')} lines.` });
     }
     const raw = body.lane;
-    const lane = raw === 'general' || raw === null || raw === undefined || raw === '' ? null : String(raw);
-    if (lane !== null && !isLaneKey(lane)) {
+    const lane = raw === 'general' || raw === null || raw === undefined || raw === '' ? '__none' : String(raw);
+    if (!isLaneKey(lane)) {
       return res.status(400).json({ error: 'That is not an email type Studio knows.' });
     }
 
-    const typeLabel = lane === null ? 'General'
-      : lane === '__none' ? 'General IT support'
-      : interestLabelFor(lane);
-    const audience = lane === null
-      ? 'Everyone in the keep-warm loop, whatever services they have shown interest in.'
-      : lane === '__none'
-        ? 'People who have not shown interest in any particular service. They get the general IT support email.'
-        : `Only people who have shown interest in ${typeLabel}.`;
+    const typeLabel = lane === '__none' ? 'General IT support' : interestLabelFor(lane);
+    const audience = lane === '__none'
+      ? 'People who have not shown interest in any particular service, plus anyone who has already had the emails for every service they are interested in. This is the general IT support email.'
+      : `Only people who have shown interest in ${typeLabel}.`;
 
     const sitting = (Array.isArray(body.avoid) ? body.avoid : [])
       .map(x => String(x || '').trim())
@@ -820,7 +818,7 @@ router.post('/subjects/suggest', async (req, res) => {
     res.json({
       suggestions: result.subjects,
       requested: count,
-      lane: lane || 'general',
+      lane,
       note: got < count
         ? `${got} of ${count}. The rest broke the house rules or were too close to lines you already have.`
         : null,
@@ -940,7 +938,11 @@ router.post('/generate', async (req, res) => {
       throw new Error(`Nothing usable came back. ${notes.join(' ')}`.trim());
     }
 
-    if (drafts.length) insertDrafts(batchId, drafts);
+    // Studio's own ideas, and any own line still carrying no type, are General
+    // IT support emails. Since the merge there is no "everyone" email for them
+    // to be; a lane-less draft would only be treated as General IT support at
+    // send time anyway, so it is saved as one and the screen files it there.
+    if (drafts.length) insertDrafts(batchId, drafts, { interest: '__none' });
 
     // Service lines, one at a time, each saved against its lane. The example
     // websites are worked out before saving, exactly as on the service card,

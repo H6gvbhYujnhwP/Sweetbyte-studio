@@ -1188,7 +1188,7 @@ function sendReason(d) {
     case 'empty_audience':
       return 'Nobody qualifies under the current stage rule, so there was nothing to send.';
     case 'retired_lane':
-      return 'That email is for a service lane Studio no longer has — IT support was merged into the general email, and backups was removed. Nothing was sent, and nothing can be. Bin it and write it on the General IT support card instead.';
+      return 'That email is for a service lane Studio no longer has — IT support was merged into General IT support, and backups was removed. Nothing was sent, and nothing can be. Bin it and write it on the General IT support card instead.';
     case 'unknown_lane':
       return 'That email is tagged to a service Studio does not recognise, so nothing was sent. Bin it and write a new one from a card.';
     case 'all_had_one':
@@ -1406,7 +1406,7 @@ function EmptyNote({ children }) {
 // them. Lines sitting in a draft stay, greyed.
 function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, onEditText, busy }) {
   const usable = idea.usable;
-  const current = idea.lane || 'general';
+  const current = idea.lane || '__none';
   const known = types.some(t => t.key === current);
 
   // Editing the wording. Local to the row, so typing in one line never
@@ -1531,12 +1531,15 @@ function SubjectLineRow({ idea, types, checked, onToggle, onDelete, onSetLane, o
 // down, and is sent with the next request so pressing Suggest again brings new
 // lines rather than the same ones.
 function SuggestLines({ types, disabled, onSuggest, onKeep, onKept }) {
-  const [lane, setLane]       = useState('general');
+  const [lane, setLane]       = useState('__none');
   const [howMany, setHowMany] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
-  const [items, setItems]     = useState([]);   // { text, state: 'new' | 'kept' | 'already' }
-  const [forLane, setForLane] = useState('general');
+  // state: 'new' | 'kept' | 'already' | 'declined'. A declined line stays in
+  // the box, crossed out, with Undo — No thanks is one click from Keep, and a
+  // slip should cost one more click, not the line.
+  const [items, setItems]     = useState([]);
+  const [forLane, setForLane] = useState('__none');
   const [note, setNote]       = useState(null);
   const [shown, setShown]     = useState([]);
   const [keeping, setKeeping] = useState(false);
@@ -1573,7 +1576,9 @@ function SuggestLines({ types, disabled, onSuggest, onKeep, onKept }) {
     onKept(forLane);
   };
 
-  const noThanks = (text) => setItems(prev => prev.filter(i => i.text !== text));
+  const setState = (text, state) => setItems(prev => prev.map(i => (i.text === text ? { ...i, state } : i)));
+  const noThanks = (text) => setState(text, 'declined');
+  const undo = (text) => setState(text, 'new');
   const close = () => { setItems([]); setNote(null); setError(null); };
 
   const selectStyle = {
@@ -1622,7 +1627,11 @@ function SuggestLines({ types, disabled, onSuggest, onKeep, onKept }) {
               padding: '7px 12px', borderTop: `1px solid ${BORDER}`, fontSize: 13,
               opacity: i.state === 'new' ? 1 : 0.6,
             }}>
-              <span style={{ flex: 1, minWidth: 200, color: TEXT, overflowWrap: 'anywhere' }}>{i.text}</span>
+              <span style={{
+                flex: 1, minWidth: 200, overflowWrap: 'anywhere',
+                color: i.state === 'declined' ? TERTIARY : TEXT,
+                textDecoration: i.state === 'declined' ? 'line-through' : 'none',
+              }}>{i.text}</span>
               {i.state === 'new' && (
                 <>
                   <Button tone="primary" disabled={keeping} onClick={() => keep([i.text])}
@@ -1636,6 +1645,13 @@ function SuggestLines({ types, disabled, onSuggest, onKeep, onKept }) {
               )}
               {i.state === 'already' && (
                 <span style={{ fontSize: 12, color: MUTED }}>Already on your list</span>
+              )}
+              {i.state === 'declined' && (
+                <>
+                  <span style={{ fontSize: 12, color: TERTIARY }}>Turned down</span>
+                  <Button tone="ghost" disabled={keeping} onClick={() => undo(i.text)}
+                    style={{ padding: '3px 9px', fontSize: 12, color: SB.strong }}>Undo</Button>
+                </>
               )}
             </div>
           ))}
@@ -1665,15 +1681,16 @@ function WriteStep({
   onSuggest, onKeepSuggested,
 }) {
   const [foldOpen, setFoldOpen] = useState(false);
-  // Which sections are open. General starts open: it is the one most used.
-  const [openSecs, setOpenSecs] = useState(() => new Set(['general']));
+  // Which sections are open. General IT support starts open: it is the one
+  // most used.
+  const [openSecs, setOpenSecs] = useState(() => new Set(['__none']));
 
   const types = reviewTypes(laneData);
   const live = ideas.filter(i => i.state !== 'sent');
   const sentHidden = ideas.length - live.length;
   const unused = ideas.filter(i => i.usable).length;
   const anySuggested = live.some(i => i.suggested);
-  const keyOf = (i) => i.lane || 'general';
+  const keyOf = (i) => i.lane || '__none';
   const labelOf = (key) => (types.find(t => t.key === key) || {}).label || laneLabel(key);
 
   // Sections in the usual order, plus any type a line still carries that
@@ -1732,7 +1749,7 @@ function WriteStep({
         <div style={{ fontSize: 12, marginTop: 8, color: picked.length > count ? DANGER : TERTIARY }}>
           {picked.length > count
             ? `${picked.length} lines ticked but only ${count} emails asked for — untick ${picked.length - count}, or ask for more.`
-            : `${picked.length} from your lines (${mix})${count - picked.length > 0 ? `, ${count - picked.length} General from Studio's own ideas` : ''}.`}
+            : `${picked.length} from your lines (${mix})${count - picked.length > 0 ? `, ${count - picked.length} General IT support from Studio's own ideas` : ''}.`}
         </div>
       )}
 
@@ -1805,7 +1822,7 @@ function WriteStep({
                   <b style={{ flex: 1, minWidth: 120 }}>{t ? t.label : `${laneLabel(k)} (no longer used)`}</b>
                   {t && (
                     <span style={{ fontSize: 11.5, color: TERTIARY }}>
-                      {k === 'general' ? 'Everyone in the loop' : k === '__none' ? 'No service ticked' : 'Only those ticked'}
+                      {k === '__none' ? 'No service ticked, or had all theirs' : 'Only those ticked'}
                       {t.people !== null ? ` · ${ppl(t.people)}` : ''}
                     </span>
                   )}
@@ -1880,9 +1897,12 @@ function WriteStep({
 // also shows how many people it would go to right now, the same numbers the
 // service cards at the top of the page show.
 //
-// The types are WHO an email goes to, not what it is about: "General" is the
-// everyone-in-the-loop email from step 1, the rest are the service lanes. A
-// general email that happens to be about cyber security is still General.
+// The types are WHO an email goes to, not what it is about: General IT support
+// is the email for people with no service ticked (or who have had all theirs),
+// and the one step 1 writes; the rest are the service lanes. A General IT
+// support email that happens to be about cyber security is still General IT
+// support. There used to be an "everyone" General type as well — it was merged
+// into General IT support, so it is not listed.
 // The service lanes in their usual order, for when the people counts have not
 // loaded yet — so a Website line still has a Website section to sit in.
 const FALLBACK_LANES = Object.keys(LANE_LABELS)
@@ -1894,16 +1914,12 @@ function reviewTypes(laneData) {
   const counts = (laneData && laneData.counts) || {};
   return [
     {
-      key: 'general', label: 'General', group: 'everyone',
-      people: laneData ? laneData.audienceTotal : null,
-      match: (d) => !d.interest,
-      note: 'Goes to everyone in the loop',
-    },
-    {
-      key: '__none', label: 'General IT support', group: 'service',
+      key: '__none', label: 'General IT support', group: 'general',
       people: laneData ? laneData.none : null,
-      match: (d) => d.interest === '__none',
-      note: 'Goes to people with no service ticked',
+      // A draft with no type at all is sent as General IT support, so it is
+      // shown here rather than nowhere.
+      match: (d) => !d.interest || d.interest === '__none',
+      note: 'Goes to people with no service ticked, or who have had all theirs',
     },
     ...keys.map(k => ({
       key: k.key, label: k.label, group: 'service',
@@ -2004,8 +2020,8 @@ function TypePicker({ types, selected, onSelect, drafts, approved }) {
         }}>
           {option(null, 'All types', '')}
           <div style={{ height: 1, background: BORDER, margin: '4px 6px' }} />
-          {heading('Goes to everyone')}
-          {types.filter(t => t.group === 'everyone').map(t => option(t, t.label, people(t.people)))}
+          {heading('General')}
+          {types.filter(t => t.group === 'general').map(t => option(t, t.label, people(t.people)))}
           {heading('By service')}
           {types.filter(t => t.group === 'service').map(t => option(t, t.label, people(t.people)))}
         </div>
@@ -2028,7 +2044,7 @@ function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin,
   const shown = current ? waiting.filter(current.match) : waiting;
   const ppl = (n) => `${n} ${n === 1 ? 'person' : 'people'}`;
   // Which types already have an approved email waiting in step 3.
-  const approved = new Set((scheduledSlots || []).map(sl => sl.interest || 'general'));
+  const approved = new Set((scheduledSlots || []).map(sl => sl.interest || '__none'));
 
   return (
     <Column n={2} title="Review" note={note} need={need}>
@@ -2058,8 +2074,8 @@ function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin,
           {current.people === null ? ''
             : current.people > 0 ? `It would go to ${ppl(current.people)}. `
             : 'Nobody is due this one right now, so it would go to no one. '}
-          {current.key === 'general'
-            ? 'Write one in step 1 above.'
+          {current.key === '__none'
+            ? 'Write one in step 1 above, or press Write on the General IT support card at the top of the page.'
             : `Press Write on the ${current.label} card at the top of the page.`}
         </div>
       )}
@@ -2171,11 +2187,11 @@ function SlotMenu({ slot, sendDays, busy, onSetDay, onMove, onRemove }) {
 }
 
 // Step 3. Approved emails, grouped by the Tuesday they go out. Send lights up
-// on the day. The headcount on the general email links to the Audience tab's
-// tick list, which is the one list that decides who a general send reaches.
+// on the day. Every email now belongs to a type with its own tick list on its
+// card at the top of the page — General IT support included — so there is no
+// separate hand-picked list here any more.
 function SendColumn({
   data, need, sending, onRead, onSend, onSetDay, onMove, onRemove, slotBusy,
-  handPicked, selectedCount, onHandPick,
 }) {
   if (!data) {
     return <Column n={3} title="Send" note="Loading…" need={false}><div /></Column>;
@@ -2194,8 +2210,7 @@ function SendColumn({
         const firstOfDay = i === 0 || slots[i - 1].date !== s.date;
         const sameDay = slots.filter(x => x.date === s.date);
         const sendable = s.dueNow && !active;
-        const lane = s.interest;
-        const reach = (!lane && handPicked && sendable) ? selectedCount : s.projectedCount;
+        const lane = s.interest || '__none';
         return (
           <React.Fragment key={s.draftId}>
             {firstOfDay && (
@@ -2215,22 +2230,9 @@ function SendColumn({
               <LaneTag interest={lane} />
               <TileSubject>{s.subject}</TileSubject>
               <div style={{ fontSize: 11.5, color: TERTIARY, lineHeight: 1.45 }}>
-                {lane
-                  ? <>Only the {s.projectedCount} ticked for {laneLabel(lane)}</>
-                  : sendable
-                    ? (
-                      <button
-                        onClick={onHandPick}
-                        title="Choose exactly who gets it, on the Audience tab"
-                        style={{
-                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                          fontFamily: 'inherit', fontSize: 11.5, color: SB.strong, textDecoration: 'underline',
-                        }}
-                      >
-                        {reach} {reach === 1 ? 'person' : 'people'}{handPicked ? ' (hand-picked)' : ''}
-                      </button>
-                    )
-                    : <>{s.projectedCount} {s.projectedCount === 1 ? 'person' : 'people'} · everybody in the loop</>}
+                {lane === '__none'
+                  ? <>{s.projectedCount} {s.projectedCount === 1 ? 'person' : 'people'} with no service ticked, or who have had all theirs</>
+                  : <>Only the {s.projectedCount} ticked for {laneLabel(lane)}</>}
                 {typeof s.countAlone === 'number' && s.countAlone > s.projectedCount && (
                   <span style={{ color: AMBER }}> · {s.countAlone - s.projectedCount} already get an earlier email that day</span>
                 )}
@@ -2457,44 +2459,6 @@ export default function KeepWarm() {
 
   // Who the next send goes to.
   //
-  // ONE selection, edited from two screens — the Audience tab's list and the
-  // general email's Send button are two windows onto the same ticks, not two independent lists.
-  // Two lists would eventually disagree about who is getting an email, and the
-  // one that lost would lose silently.
-  //
-  // Held as a base plus exceptions rather than a list of the ticked, because a
-  // search filters the rows on screen: "deselect all" while a search is active
-  // must mean everybody, not just the six currently visible.
-  const [selBase, setSelBase] = useState('all');       // 'all' | 'none'
-  const [selExcept, setSelExcept] = useState(() => new Set());
-
-  const isChecked = useCallback(
-    (email) => {
-      const e = String(email || '').toLowerCase();
-      return selBase === 'all' ? !selExcept.has(e) : selExcept.has(e);
-    },
-    [selBase, selExcept],
-  );
-
-  const toggleOne = useCallback((email) => {
-    const e = String(email || '').toLowerCase();
-    setSelExcept(prev => {
-      const next = new Set(prev);
-      if (next.has(e)) next.delete(e); else next.add(e);
-      return next;
-    });
-  }, []);
-
-  const selectAll  = useCallback(() => { setSelBase('all');  setSelExcept(new Set()); }, []);
-  const selectNone = useCallback(() => { setSelBase('none'); setSelExcept(new Set()); }, []);
-
-  // Exact, not an estimate: exceptions only ever hold addresses that were in
-  // the loop when they were ticked.
-  const audienceTotal = (overview && overview.audienceCount) || 0;
-  const selectedCount = selBase === 'all'
-    ? Math.max(0, audienceTotal - selExcept.size)
-    : selExcept.size;
-  const handPicked = selBase === 'none' || selExcept.size > 0;
 
   const [emptying, setEmptying]   = useState(false);
 
@@ -2657,29 +2621,24 @@ export default function KeepWarm() {
     // A plain confirm rather than a styled modal. This is the one irreversible
     // button on the screen and the number in it is the whole point — a custom
     // dialog would be prettier and easier to click through without reading.
-    // A lane email's headcount comes from the server, which has already narrowed
-    // to that lane and applied the ticks saved against the draft. The Audience
-    // tab's hand-picked selection is about the general email and must not be
-    // read as though it applied here — it would put the wrong number in the one
-    // dialog that cannot be taken back.
-    const going = (!slot.interest && handPicked) ? selectedCount : slot.projectedCount;
+    // The headcount comes from the server, which has already narrowed to the
+    // email's type and applied the ticks saved against the draft on its card.
+    const going = slot.projectedCount;
+    const type = slot.interest || '__none';
     const ok = window.confirm(
       `Send "${slot.subject}" to ${going} ${going === 1 ? 'person' : 'people'}?`
-      + (slot.interest
-          ? `\n\nThis is the ${laneLabel(slot.interest)} email. It goes only to the people ticked for ${laneLabel(slot.interest)} — nobody else in the loop will get it.`
-          : '')
-      + ((!slot.interest && handPicked) ? `\n\nYou have hand-picked these — the other ${Math.max(0, slot.projectedCount - going)} in the loop will not get it.` : '')
+      + (type === '__none'
+          ? `\n\nThis is the General IT support email. It goes only to people with no service ticked, or who have had all their service emails.`
+          : `\n\nThis is the ${laneLabel(type)} email. It goes only to the people ticked for ${laneLabel(type)} — nobody else in the loop will get it.`)
       + `\n\nYou will have ${(schedule && schedule.config.undoSeconds) || 10} seconds to undo before anything leaves.`
     );
     if (!ok) return;
 
     setSending(true);
     try {
-      // Send whichever tick list is the shorter and truer description of what
-      // was asked for, and let the server resolve it against the live audience.
+      // Who it reaches is decided on the server: the email's type, the live
+      // audience, and the ticks saved against the draft on its card.
       const payload = { draftId: slot.draftId };
-      if (selBase === 'none') payload.only = Array.from(selExcept);
-      else if (selExcept.size) payload.exclude = Array.from(selExcept);
 
       const r = await fetch('/api/keepwarm/send', {
         method: 'POST',
@@ -2688,9 +2647,6 @@ export default function KeepWarm() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(sendReason(d));
-      // The ticks were for this send only, so they go once it is queued. Left
-      // in place they would silently narrow the next fortnight's send too.
-      selectAll();
       await loadSchedule();
     } catch (err) {
       setSendError(err.message);
@@ -3490,25 +3446,7 @@ export default function KeepWarm() {
                     <Button tone={listMode === 'manual' ? 'primary' : 'plain'} onClick={() => setListMode('manual')}>
                       By hand{manualRows && manualRows.length ? ` (${manualRows.length})` : ''}
                     </Button>
-                    {listMode === 'included' && (
-                      <>
-                        <Button onClick={selectAll}>Select all</Button>
-                        <Button onClick={selectNone}>Deselect all</Button>
-                        <span style={{ fontSize: 12, color: TERTIARY, alignSelf: 'center' }}>
-                          {selectedCount} ticked for the next send
-                        </span>
-                      </>
-                    )}
                   </div>
-
-                  {listMode === 'included' && handPicked && (
-                    <div style={{ fontSize: 12, color: AMBER, background: AMBER_BG, border: `1px solid ${AMBER}`,
-                                  borderRadius: 7, padding: '8px 11px', marginBottom: 10, lineHeight: 1.5 }}>
-                      These ticks apply to the next send only, and clear once it goes. Nobody is removed
-                      from the loop — unticking somebody here does not change their stage or exclude them
-                      from future emails.
-                    </div>
-                  )}
 
                   {listMode === 'dead' && (
                     <div style={{ fontSize: 12, color: DANGER, background: DANGER_BG, border: `1px solid ${DANGER}`,
@@ -3577,9 +3515,7 @@ export default function KeepWarm() {
                         <AudienceRow
                           key={r.email}
                           row={r}
-                          selectable={listMode === 'included'}
-                          checked={isChecked(r.email)}
-                          onToggle={toggleOne}
+                          selectable={false}
                           onRemove={removeFromLoop}
                           onRestore={putBackInLoop}
                           busy={loopBusy}
@@ -3662,13 +3598,6 @@ export default function KeepWarm() {
               {slotError && <Banner tone="bad">{slotError}</Banner>}
               {genError && <Banner tone="bad">{genError}</Banner>}
               {genNote && <Banner tone="warn">{genNote}</Banner>}
-              {handPicked && (
-                <Banner tone="warn">
-                  You have hand-picked {selectedCount} of {audienceTotal} on the Audience tab for the
-                  next general email. The ticks clear as soon as it goes.
-                </Banner>
-              )}
-
               {/* ── Step 1 ─────────────────────────────────────────────── */}
               <WriteStep
                 count={count}
@@ -3724,9 +3653,6 @@ export default function KeepWarm() {
                   onMove={moveSlot}
                   onRemove={removeSlot}
                   slotBusy={slotBusy}
-                  handPicked={handPicked}
-                  selectedCount={selectedCount}
-                  onHandPick={() => { setTab('audience'); setListMode('included'); setShowList(true); }}
                 />
                 <SentColumn runs={sentList} />
               </div>

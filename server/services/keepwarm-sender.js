@@ -271,14 +271,18 @@ export function cadenceConfig() {
 /**
  * The slice of the audience one draft is allowed to reach.
  *
- * No lane on the draft means the general email, which goes to whoever is in the
- * loop — that is how every draft written by the 3/6/9 generator behaves, and it
- * is unchanged. '__none' is the people with nothing ticked, who are a real group
- * and not an absence.
+ * '__none' is General IT support: the people with nothing ticked, plus anyone
+ * who has already had every topic they are ticked for. It is the only general
+ * email there is now — the old "everyone in the loop" General email was merged
+ * into it (see keepwarm-store.js).
+ *
+ * A draft with no lane at all is treated as General IT support. Nothing writes
+ * one any more and the store moves any that are left, so this is the backstop:
+ * the one outcome that must never happen is a lane-less draft quietly reaching
+ * everyone, including people whose fortnight belongs to a service email.
  */
 function laneOf(included, interest) {
-  const key = String(interest || '').trim();
-  if (!key) return included;
+  const key = String(interest || '').trim() || '__none';
 
   // WHOSE TURN IT IS, not merely who is ticked.
   //
@@ -850,8 +854,16 @@ export function schedule(limit = 10) {
   // either was written — so there is no reason to make them wait a fortnight
   // for each other.
   //
-  // A general email is different. It reaches everybody in the loop, so it
-  // overlaps every lane email there is, and it gets a day to itself.
+  // General IT support is a lane like the others since the merge, so it sits
+  // on the same day as the service emails: the rotation means nobody is due
+  // both.
+  //
+  // What can NOT share a day is two emails of the SAME type. The second would
+  // reach nobody — the first takes everybody in that lane and the fortnight
+  // rule stops anybody getting two — so it moves to the next send day. That
+  // matters most for General IT support, where several approved drafts are
+  // normal; it used to be handled by giving every general email a day of its
+  // own.
   //
   // A draft pinned to a day by hand overrules all of this for itself. The
   // grouping is a sensible default, not a rule, and the screen lets any email
@@ -865,34 +877,30 @@ export function schedule(limit = 10) {
     return nextSendDay(after.toISOString().slice(0, 10)) || ymd;
   };
 
-  // Days somebody has pinned an email to. An automatic general email will not
-  // be dropped onto one of these, because it would swallow whatever is there.
-  const pinnedDays = new Set(approved.map(d => d.send_on).filter(Boolean));
-
-  let laneDay = firstDay;
-  let generalDay = null;
+  // Which days each type already has an email on. Seeded with the pinned
+  // ones, so an automatic email never lands on a day a hand-pinned email of
+  // the same type already holds.
+  const typeOf = (d) => d.interest || '__none';
+  const daysByType = new Map();
+  const take = (type, day) => {
+    if (!daysByType.has(type)) daysByType.set(type, new Set());
+    daysByType.get(type).add(day);
+  };
+  for (const d of approved) if (d.send_on) take(typeOf(d), d.send_on);
 
   const slotDates = approved.map((d) => {
-    // Pinned by hand. Never moved, even onto a day that already has a general
-    // email on it: the screen shows what that costs, and overruling somebody's
-    // explicit choice silently would be worse than letting them see it.
+    // Pinned by hand. Never moved, even onto a day that already has an email
+    // of the same type: the screen shows what that costs, and overruling
+    // somebody's explicit choice silently would be worse than letting them see
+    // it.
     if (d.send_on) return d.send_on;
 
-    if (d.interest) {
-      // Lane emails stack up on the first free day, alongside each other.
-      while (generalDay === laneDay) laneDay = dayAfter(laneDay);
-      return laneDay;
-    }
-
-    // A general email: its own day, after everything already placed.
-    let day = generalDay ? dayAfter(generalDay) : laneDay;
-    if (!generalDay && day === laneDay) {
-      // The lanes are already sitting on this one.
-      const laneWaiting = approved.some(x => !x.send_on && x.interest);
-      if (laneWaiting) day = dayAfter(day);
-    }
-    while (pinnedDays.has(day)) day = dayAfter(day);
-    generalDay = day;
+    // The first send day this type does not already have an email on.
+    const type = typeOf(d);
+    const used = daysByType.get(type) || new Set();
+    let day = firstDay;
+    for (let guard = 0; used.has(day) && guard < 200; guard += 1) day = dayAfter(day);
+    take(type, day);
     return day;
   });
 
