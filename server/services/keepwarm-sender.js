@@ -954,8 +954,19 @@ export function schedule(limit = 10) {
       // in the queue, and a greyed-out arrow would be a lie.
       canMoveUp:      idx > 0,
       canMoveDown:    idx < approved.length - 1,
+      // Queue position, kept so the sort below can keep queue order within a day.
+      queueIndex:     idx,
     };
   });
+
+  // Shown by DATE, queue order within each day. The screen starts a new date
+  // heading whenever the date changes from one row to the next, so a list in
+  // queue order showed "Tue 3 Nov" twice once same-type emails were spread
+  // over different days — and an email moved to another day stayed where it
+  // was in the list, looking as though it had not moved. The arrows still move
+  // an email in the queue, which decides which of two same-type emails goes
+  // first.
+  slots.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.queueIndex - b.queueIndex));
 
   return {
     activeRun: active
