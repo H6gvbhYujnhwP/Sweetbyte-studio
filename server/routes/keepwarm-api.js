@@ -83,7 +83,28 @@ import {
   laneTakesExamples,
   laneExampleWording,
   EXAMPLES_PER_EMAIL,
+  laneRequiresExamples,
+  examplesFootNote,
+  examplesForDraft,
+  draftNeedsExamples,
+  attachExamplesToDraft,
 } from '../services/keepwarm-examples.js';
+
+// What the screen needs to show the "no example sites" notice on a draft:
+// whether it is missing them, and which ones pressing the button would add.
+function examplesState(draft) {
+  const needs = draftNeedsExamples(draft);
+  return {
+    needsExamples: needs,
+    nextExamples: needs ? peekNextExamples(draft.interest).map(s => s.name) : [],
+  };
+}
+
+// The sentence for a Website email asked for with nothing on the list.
+function noExamplesMessage(lane) {
+  const noun = laneExampleWording(lane)?.noun || 'examples';
+  return `A ${interestLabelFor(lane)} email has to show ${noun} we have built, and the list is empty. Add at least one on the Example ${noun} tab of the ${interestLabelFor(lane)} card, then press Write again.`;
+}
 import { reminderStatus } from '../services/keepwarm-reminders.js';
 import {
   listIdeas,
@@ -291,9 +312,20 @@ router.post('/interests/:key/generate', async (req, res) => {
   const key = String(req.params.key || '').trim();
   if (!isLaneKey(key)) return res.status(404).json({ error: 'unknown_interest' });
 
+  // A Website email must carry example sites. Refused before anything is
+  // written, rather than writing one that could never be sent.
+  if (laneRequiresExamples(key) && !peekNextExamples(key).length) {
+    return res.status(400).json({ error: noExamplesMessage(key) });
+  }
+
   const batchId = createBatch(1);
   try {
-    const draft = await generateForInterest({ interestKey: key, avoid: previousSubjects(30) });
+    const draft = await generateForInterest({
+      interestKey: key,
+      avoid: previousSubjects(30),
+      // Set only when examples will actually go under this email.
+      footNote: examplesFootNote(key),
+    });
 
     // The example websites, before the draft exists rather than after.
     //
@@ -906,8 +938,16 @@ router.post('/generate', async (req, res) => {
         notes.push(`Your own line "${subject}" is set to a type Studio no longer has, so it was not used. Change its type and try again.`);
         continue;
       }
+      if (lane && laneRequiresExamples(lane) && !peekNextExamples(lane).length) {
+        notes.push(`Your own line "${subject}" was not used: ${noExamplesMessage(lane)}`);
+        continue;
+      }
       try {
-        const draft = await generateFromSubject({ subject, avoid: previous });
+        const draft = await generateFromSubject({
+          subject,
+          avoid: previous,
+          footNote: lane ? examplesFootNote(lane) : null,
+        });
         if (lane) laneLines.push({ lane, draft });
         else fromLines.push(draft);
       } catch (err) {
@@ -1024,6 +1064,7 @@ router.get('/drafts/:id', (req, res) => {
 
     res.json({
       draft: row,
+      ...examplesState(row),
       // The editable form of the body. The operator works in plain paragraphs;
       // the inline styling is put back on save, so no tag ever reaches the screen.
       bodyText: htmlToText(row.html_body, { keepBold: true }),
@@ -1047,11 +1088,32 @@ router.get('/drafts/:id', (req, res) => {
  * The Schedule tab's Read button. ?email picks whose copy from the list. One email exactly as a real recipient would
  * get it — From, To, subject and the whole rendered message. Changes nothing.
  */
+/**
+ * POST /drafts/:id/examples
+ *
+ * "Add example sites" — attach the next examples to a draft written without
+ * them, leaving its wording alone. Approval is kept: the email the operator
+ * approved is unchanged, it has only gained the line that was missing, and
+ * the button sits right above the preview that shows it.
+ */
+router.post('/drafts/:id/examples', async (req, res) => {
+  try {
+    const row = getDraft(req.params.id);
+    if (!row) return res.status(404).json({ error: 'That email is not there any more.' });
+    const result = await attachExamplesToDraft(row);
+    if (result.error) return res.status(409).json({ error: result.error });
+    res.json({ ok: true, sites: result.sites.map(s => s.name) });
+  } catch (err) {
+    console.error('[keepwarm] attach examples failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/drafts/:id/read', (req, res) => {
   try {
     const result = readCopy(req.params.id, req.query.email || null);
     if (!result.ok) return res.status(404).json({ error: result.reason });
-    res.json(result);
+    res.json({ ...result, ...examplesState(getDraft(req.params.id)) });
   } catch (err) {
     console.error('[keepwarm] read copy failed:', err);
     res.status(500).json({ error: err.message });
@@ -1148,7 +1210,12 @@ router.post('/drafts/:id/regenerate', async (req, res) => {
       });
       result = updateDraft(req.params.id, { subject: newSubject, html: currentHtml });
     } else {
-      const body = await generateBody({ subject: currentSubject, currentHtml });
+      const body = await generateBody({
+        subject: currentSubject,
+        currentHtml,
+        // This draft carries an examples line, so the rewrite keeps saying so.
+        footNote: examplesForDraft(row.id) && row.interest ? examplesFootNote(row.interest) : null,
+      });
       result = updateDraft(req.params.id, { subject: currentSubject, html: body.html });
     }
 

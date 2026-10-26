@@ -222,14 +222,16 @@ export class KeepWarmEngine {
    * front. Nothing the model says about the subject is read back, and the
    * subject checks do not run on it.
    */
-  async writeFromSubject({ knowledgeBase, subject, doNotRepeat = [], slot = null }) {
+  async writeFromSubject({ knowledgeBase, subject, doNotRepeat = [], slot = null, footNote = null }) {
     assertKnowledgeBase(knowledgeBase);
     const fixed = withSubjectPrefix(subject);
     if (!fixed) throw new Error('No subject line given.');
+    // The repair prompt only sees the slot, so the examples note rides on it.
+    if (footNote) slot = { ...(slot || {}), footNote };
 
     let candidate = parseJsonOnly(await this.model.complete({
       system: buildSystemPrompt(),
-      user: buildFromSubjectPrompt({ knowledgeBase, subject: fixed, doNotRepeat }),
+      user: buildFromSubjectPrompt({ knowledgeBase, subject: fixed, doNotRepeat, footNote }),
       temperature: 0.7,
     }));
 
@@ -339,12 +341,13 @@ export class KeepWarmEngine {
     return { subject };
   }
 
-  async rewriteBody({ knowledgeBase, subject, plainBody }) {
+  async rewriteBody({ knowledgeBase, subject, plainBody, footNote = null }) {
     assertKnowledgeBase(knowledgeBase);
     const fixed = String(subject || '').trim();
+    const slot = footNote ? { footNote } : null;
     let candidate = parseJsonOnly(await this.model.complete({
       system: buildSystemPrompt(),
-      user: buildBodyRewritePrompt({ knowledgeBase, subject: fixed, plainBody }),
+      user: buildBodyRewritePrompt({ knowledgeBase, subject: fixed, plainBody, footNote }),
       temperature: 0.65,
     }));
     for (let attempt = 0; attempt <= this.maxRepairAttempts; attempt += 1) {
@@ -353,7 +356,7 @@ export class KeepWarmEngine {
       if (attempt === this.maxRepairAttempts) throw new Error(`Invalid rewritten body: ${errors.join('; ')}`);
       candidate = parseJsonOnly(await this.model.complete({
         system: buildSystemPrompt(),
-        user: buildRepairPrompt({ knowledgeBase, slot: null, candidate, errors, fixedSubject: fixed }),
+        user: buildRepairPrompt({ knowledgeBase, slot, candidate, errors, fixedSubject: fixed }),
         temperature: 0.4,
       }));
     }

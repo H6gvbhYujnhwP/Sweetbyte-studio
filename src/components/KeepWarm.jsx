@@ -807,9 +807,34 @@ function laneLabel(key) {
  * a rich editor would quietly rewrite them into something that renders
  * differently in Word's mail renderer.
  */
+// "No example sites" — shown on a Website email that has none. Studio will not
+// send one like that, so the notice says so and offers the fix in place: the
+// button attaches the next sites on the list without changing the wording.
+function NeedsExamplesNotice({ next = [], onAdd, busy, error }) {
+  const names = next.length > 1 ? `${next.slice(0, -1).join(', ')} and ${next[next.length - 1]}` : next[0];
+  return (
+    <div style={{
+      background: DANGER_BG, border: `1px solid ${DANGER}`, color: DANGER, borderRadius: 8,
+      padding: '10px 12px', marginBottom: 12, fontSize: 13, lineHeight: 1.5,
+    }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ flex: 1, minWidth: 220 }}>
+          <b>No example sites on this Website email.</b> It can't be sent without them.
+          {names ? ` Next up on your list: ${names}.` : ' Your list is empty — add some on the Example sites tab of the Website card.'}
+        </span>
+        <Button tone="primary" disabled={busy || !names} onClick={onAdd}>
+          {busy ? 'Adding…' : 'Add example sites'}
+        </Button>
+      </div>
+      {error && <div style={{ marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
 function ReadPanel({
   state, onClose, onChange, onSave, onStatus, saving,
   onRegenerate, regenerating, subjectHistory, onPickSubject, bodyUndo, onUndoBody, regenError,
+  onAddExamples, addingExamples, examplesError,
 }) {
   if (!state) return null;
   const { draft, preview } = state;
@@ -879,6 +904,15 @@ function ReadPanel({
           )}
 
           {regenError && <Banner tone="bad">{regenError}</Banner>}
+
+          {state.needsExamples && (
+            <NeedsExamplesNotice
+              next={state.nextExamples || []}
+              onAdd={() => onAddExamples(draft.id)}
+              busy={addingExamples}
+              error={examplesError}
+            />
+          )}
 
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 5 }}>How it will look</div>
           <div
@@ -1026,6 +1060,7 @@ function WhoGetsIt({ people, selected, switching, onPick }) {
 function ReadCopyPanel({
   state, onClose, onEdit, onPick, onApprove, onBin, onRestore, busy,
   testTo, onTestTo, onTest, testBusy, testNote, testError,
+  onAddExamples, addingExamples, examplesError,
 }) {
   if (!state) return null;
   const { slot, copy, loading, error, switching } = state;
@@ -1114,6 +1149,15 @@ function ReadCopyPanel({
               {' '}The unsubscribe link is switched off here so it cannot be clicked by mistake.
             </div>
 
+            {copy.needsExamples && (
+              <NeedsExamplesNotice
+                next={copy.nextExamples || []}
+                onAdd={() => onAddExamples(copy.draftId)}
+                busy={addingExamples}
+                error={examplesError}
+              />
+            )}
+
             {/* The email itself, full length — no inner scroll box. */}
             <div
               style={{
@@ -1199,6 +1243,8 @@ function sendReason(d) {
       return `The audience is ${n} people, above the safety limit of ${cap}. That usually means stages have come across wrong from WorkTrackr. Nothing was sent — check the Audience tab.`;
     case 'no_draft':
       return 'That draft no longer exists.';
+    case 'no_examples':
+      return 'This Website email has no example sites on it, so it was not sent. Press Read on it and use “Add example sites”, then send it.';
     default:
       return (d && d.error) || 'Could not send.';
   }
@@ -2399,6 +2445,9 @@ export default function KeepWarm() {
   // Opens on Emails: it is where the fortnightly work happens.
   const [tab, setTab]             = useState('emails');
   const [readCopy, setReadCopy]   = useState(null);
+  // "Add example sites" on a Website email that has none.
+  const [addingExamples, setAddingExamples] = useState(false);
+  const [examplesError, setExamplesError]   = useState(null);
   // Which service-interest lane is selected, or null for all of them. Held
   // here rather than inside the cards because the audience list below has to
   // narrow to match, and two pieces of the screen reading one value is the
@@ -3209,6 +3258,7 @@ export default function KeepWarm() {
       setTestNote(null);
       setTestError(null);
       setReadCopy({ slot, copy: null, loading: true, switching: null, error: null });
+      setExamplesError(null);
     }
     try {
       const q = email ? `?email=${encodeURIComponent(email)}` : '';
@@ -3221,6 +3271,35 @@ export default function KeepWarm() {
     }
   }
 
+  // Attach the next example sites to a Website email written without them.
+  // The wording is left alone. Whichever view is open is refreshed in place —
+  // the editing view keeps any unsaved typing, only its preview is replaced.
+  async function addExamples(id) {
+    setAddingExamples(true);
+    setExamplesError(null);
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${id}/examples`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not add the example sites');
+      if (readCopy && readCopy.slot.draftId === id) {
+        await openReadCopy(readCopy.slot, readCopy.copy && readCopy.copy.to ? readCopy.copy.to.email : null);
+      }
+      if (open && open.draft.id === id) {
+        const g = await fetch(`/api/keepwarm/drafts/${id}`);
+        const gd = await g.json();
+        if (g.ok) {
+          setOpen(o => (o && o.draft.id === id
+            ? { ...o, preview: gd.preview, needsExamples: gd.needsExamples, nextExamples: gd.nextExamples }
+            : o));
+        }
+      }
+    } catch (err) {
+      setExamplesError(err.message);
+    } finally {
+      setAddingExamples(false);
+    }
+  }
+
   // The buttons inside the Read view. Each changes the email's status and
   // closes the view, so the board underneath shows where it went.
   async function statusFromRead(id, status) {
@@ -3229,6 +3308,7 @@ export default function KeepWarm() {
   }
 
   async function openDraft(id) {
+    setExamplesError(null);
     try {
       const r = await fetch(`/api/keepwarm/drafts/${id}`);
       const d = await r.json();
@@ -3236,7 +3316,11 @@ export default function KeepWarm() {
       setSubjectHistory([]);
       setBodyUndo(null);
       setRegenError(null);
-      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
+      setOpen(o => ({
+        ...(o && o.draft.id === d.draft.id ? o : {}),
+        draft: d.draft, bodyText: d.bodyText, preview: d.preview,
+        ...(d.needsExamples !== undefined ? { needsExamples: d.needsExamples, nextExamples: d.nextExamples } : {}),
+      }));
     } catch (err) {
       setError(err.message);
     }
@@ -3272,7 +3356,11 @@ export default function KeepWarm() {
       } else {
         setBodyUndo(priorBody);
       }
-      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
+      setOpen(o => ({
+        ...(o && o.draft.id === d.draft.id ? o : {}),
+        draft: d.draft, bodyText: d.bodyText, preview: d.preview,
+        ...(d.needsExamples !== undefined ? { needsExamples: d.needsExamples, nextExamples: d.nextExamples } : {}),
+      }));
       await loadDrafts();
     } catch (err) {
       setRegenError(err.message);
@@ -3297,7 +3385,11 @@ export default function KeepWarm() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not restore');
-      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
+      setOpen(o => ({
+        ...(o && o.draft.id === d.draft.id ? o : {}),
+        draft: d.draft, bodyText: d.bodyText, preview: d.preview,
+        ...(d.needsExamples !== undefined ? { needsExamples: d.needsExamples, nextExamples: d.nextExamples } : {}),
+      }));
       await loadDrafts();
     } catch (err) {
       setRegenError(err.message);
@@ -3318,7 +3410,11 @@ export default function KeepWarm() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Could not save');
-      setOpen({ draft: d.draft, bodyText: d.bodyText, preview: d.preview });
+      setOpen(o => ({
+        ...(o && o.draft.id === d.draft.id ? o : {}),
+        draft: d.draft, bodyText: d.bodyText, preview: d.preview,
+        ...(d.needsExamples !== undefined ? { needsExamples: d.needsExamples, nextExamples: d.nextExamples } : {}),
+      }));
       await loadDrafts();
     } catch (err) {
       setError(err.message);
@@ -3690,6 +3786,9 @@ export default function KeepWarm() {
         testBusy={testBusy}
         testNote={testNote}
         testError={testError}
+        onAddExamples={addExamples}
+        addingExamples={addingExamples}
+        examplesError={examplesError}
       />
 
       <ReadPanel
@@ -3715,6 +3814,9 @@ export default function KeepWarm() {
         onPickSubject={(sub) => setOpen(o => ({ ...o, draft: { ...o.draft, subject: sub } }))}
         bodyUndo={bodyUndo}
         onUndoBody={restoreBody}
+        onAddExamples={addExamples}
+        addingExamples={addingExamples}
+        examplesError={examplesError}
       />
     </div>
   );

@@ -639,3 +639,33 @@ test('suggest: General IT support lines are not told to belong to a service', as
   await new KeepWarmEngine(model).suggestSubjects({ ...suggestArgs, count: 5 });
   assert.doesNotMatch(model.calls[0].user, /must clearly belong to/);
 });
+
+// ── Examples under the email ────────────────────────────────────────────────
+// A Website email ends with links to sites Sweetbyte has built. When that line
+// is coming, the writer is told so the body can mention it; when it is not,
+// the writer must never be told, so no email promises examples it lacks.
+
+import { buildBatchPrompt, buildFromSubjectPrompt, buildBodyRewritePrompt } from './keepwarm-engine-prompts.js';
+
+const NOTE = 'After the closing paragraph, Studio adds a line linking to websites.';
+
+test('examples note: in the lane prompt only when a slot carries it', () => {
+  const slot = planInterestSlot({ interestKey: 'website', seed: '2026-10-26' });
+  const without = buildBatchPrompt({ count: 1, knowledgeBase, slots: [slot], doNotRepeat: [] });
+  assert.doesNotMatch(without, /afterTheEmail/);
+  const withNote = buildBatchPrompt({ count: 1, knowledgeBase, slots: [{ ...slot, footNote: NOTE }], doNotRepeat: [] });
+  assert.match(withNote, /"afterTheEmail":"After the closing paragraph/);
+});
+
+test('examples note: own-line and rewrite prompts carry it only when given', () => {
+  assert.doesNotMatch(buildFromSubjectPrompt({ knowledgeBase, subject: 'x' }), /WHAT FOLLOWS THE EMAIL/);
+  assert.match(buildFromSubjectPrompt({ knowledgeBase, subject: 'x', footNote: NOTE }), /WHAT FOLLOWS THE EMAIL\nAfter the closing/);
+  assert.doesNotMatch(buildBodyRewritePrompt({ knowledgeBase, subject: 'x', plainBody: 'y' }), /WHAT FOLLOWS THE EMAIL/);
+  assert.match(buildBodyRewritePrompt({ knowledgeBase, subject: 'x', plainBody: 'y', footNote: NOTE }), /WHAT FOLLOWS THE EMAIL/);
+});
+
+test('examples note: a repair of an own-line email still sees it', async () => {
+  const model = suggestModel(['{"angle":"bad","subject":"wrong","html":"","plain":""}', '{}', '{}']);
+  await assert.rejects(new KeepWarmEngine(model).writeFromSubject({ knowledgeBase, subject: 'Is your website hiding?', footNote: NOTE }));
+  assert.match(model.calls[1].user, /afterTheEmail/);
+});

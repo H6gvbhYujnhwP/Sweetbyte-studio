@@ -50,7 +50,7 @@ import { sendEmail } from './ses.js';
 import { isSuppressed, unsubUrlFor } from './service-email-sender.js';
 import { buildAudience, getDraft, draftSkips, emailedThisFortnight, topicsHadByEmail, nextTopicFor, INTEREST_KEYS, RETIRED_INTERESTS, SCHEDULE_ORDER } from './keepwarm-store.js';
 import { renderEmailHtml, htmlToText } from './keepwarm-generator.js';
-import { examplesHtmlForDraft } from './keepwarm-examples.js';
+import { examplesHtmlForDraft, draftNeedsExamples } from './keepwarm-examples.js';
 import { signatureImages } from './email-signature.js';
 import { londonNow, isSendDay, nextSendDay, sendDayLabel } from './keepwarm-reminders.js';
 
@@ -334,6 +334,11 @@ export function queueRun(draftId, { only = null, exclude = null } = {}) {
       lane: draft.interest,
     };
   }
+
+  // A Website email is there to show sites Sweetbyte has built. One with no
+  // examples on it is refused here, whatever the screen thought, so it cannot
+  // go out by accident. The fix is the "Add example sites" button on the email.
+  if (draftNeedsExamples(draft)) return { ok: false, reason: 'no_examples' };
 
   const { included } = buildAudience();
   if (!included.length) return { ok: false, reason: 'empty_audience' };

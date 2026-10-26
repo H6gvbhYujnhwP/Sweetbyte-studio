@@ -108,6 +108,32 @@ export const EXAMPLE_LANES = {
 
 export const LANES_WITH_EXAMPLES = Object.keys(EXAMPLE_LANES);
 
+// Lanes where an email is not allowed to exist without examples — Billy's
+// decision, October 2026: a Website email is there to show off sites Sweetbyte
+// has built, so one without them is not worth sending. Custom apps is not on
+// this list: it has no apps to show yet, and an empty list there simply means
+// no examples line, as before.
+export const LANES_REQUIRING_EXAMPLES = new Set(['website']);
+
+export function laneRequiresExamples(lane) {
+  return LANES_REQUIRING_EXAMPLES.has(String(lane || '').trim());
+}
+
+/**
+ * The instruction that tells the email writer examples will follow the email,
+ * so the body can say so in its own words. Null when this email will not carry
+ * any: a lane that does not take examples, or one whose list is empty. That
+ * matters — an email promising examples at the bottom with nothing there is
+ * worse than one that never mentions them.
+ */
+export function examplesFootNote(lane) {
+  const wording = laneExampleWording(lane);
+  if (!wording || !peekNextExamples(lane).length) return null;
+  return `After the closing paragraph, Studio adds a line linking to ${wording.subject}. `
+    + 'Somewhere in the body, in one short natural phrase, tell the reader there are examples of our work at the bottom of the email so they can see the kind of thing we do. '
+    + 'Do not name any client or business, do not write any address or link, and do not describe the examples.';
+}
+
 export function laneTakesExamples(lane) {
   return Object.prototype.hasOwnProperty.call(EXAMPLE_LANES, String(lane || '').trim());
 }
@@ -467,6 +493,46 @@ export function examplesHtml(frozen) {
     : `${links.slice(0, -1).join(', ')} and ${links[links.length - 1]}`;
 
   return `<p style="${P_STYLE}">${escapeHtml(frozen.lead)} ${joined}.</p>`;
+}
+
+/**
+ * True when a draft must carry examples and does not: a Website email, not yet
+ * sent, with nothing frozen onto it. The screen shows a notice and an "Add
+ * example sites" button for these, and the sender refuses to send one.
+ */
+export function draftNeedsExamples(draft) {
+  if (!draft || draft.status === 'sent') return false;
+  if (!laneRequiresExamples(draft.interest)) return false;
+  return !examplesForDraft(draft.id);
+}
+
+/**
+ * Attach the next examples to a draft that has none, without touching its
+ * wording. For an email written before the list was filled in.
+ *
+ * The sentence is written BEFORE the rotation moves on, so a failed sentence
+ * leaves the list exactly where it was rather than skipping a pair nobody saw.
+ *
+ * Returns { ok, sites } or { error } with a sentence the screen shows as it is.
+ */
+export async function attachExamplesToDraft(draft) {
+  if (!draft) return { error: 'That email is not there any more.' };
+  if (draft.status === 'sent') return { error: 'That email has already been sent.' };
+  const lane = String(draft.interest || '').trim();
+  if (!laneTakesExamples(lane)) return { error: 'This type of email does not carry examples.' };
+  if (examplesForDraft(draft.id)) return { error: 'This email already has its examples.' };
+
+  const preview = peekNextExamples(lane);
+  if (!preview.length) {
+    return { error: `There are no ${laneExampleWording(lane).noun} on the list yet. Add some on the Example ${laneExampleWording(lane).noun} tab first.` };
+  }
+
+  const lead = await writeLeadSentence({ lane, count: preview.length });
+  const sites = takeNextExamples(lane, EXAMPLES_PER_EMAIL);
+  if (!sites.length) return { error: 'The list was emptied while this was being written. Try again.' };
+
+  freezeExamplesForDraft(draft.id, { lane, lead, sites });
+  return { ok: true, sites };
 }
 
 /**

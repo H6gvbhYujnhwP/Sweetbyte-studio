@@ -241,12 +241,15 @@ export async function generateSubject({ bodyHtml, avoid = [] }) {
  * shorten or repunctuate, and refusing it for having an exclamation mark in it
  * would be Studio overruling the person using it.
  */
-export async function generateBody({ subject, currentHtml }) {
+// `footNote` is set when the draft carries an examples line, so the rewrite
+// keeps mentioning it. See examplesFootNote() in keepwarm-examples.js.
+export async function generateBody({ subject, currentHtml, footNote = null }) {
   requireRag();
   const result = await engineFor('body').rewriteBody({
     knowledgeBase: RAG,
     subject: String(subject || '').trim(),
     plainBody: htmlToText(currentHtml),
+    footNote,
   });
   return {
     html: String(result.html).trim(),
@@ -265,7 +268,7 @@ export async function generateBody({ subject, currentHtml }) {
  * these are in Billy's voice rather than the model's, and a model asked to
  * consider a line will tidy it into house style without being told to.
  */
-export async function generateFromSubject({ subject, avoid = [] }) {
+export async function generateFromSubject({ subject, avoid = [], footNote = null }) {
   requireRag();
   const fixed = String(subject || '').trim();
   if (!fixed) throw new Error('No subject line given.');
@@ -274,6 +277,7 @@ export async function generateFromSubject({ subject, avoid = [] }) {
     knowledgeBase: RAG,
     subject: fixed,
     doNotRepeat: doNotRepeatFrom(avoid),
+    footNote,
   });
 
   // The operator's line, returned exactly as it was given. Nothing the model
@@ -299,9 +303,11 @@ export async function generateFromSubject({ subject, avoid = [] }) {
  * a general email sitting under a Microsoft 365 heading would go out looking
  * correct and nobody would catch it.
  */
-export async function generateForInterest({ interestKey, avoid = [], seed } = {}) {
+export async function generateForInterest({ interestKey, avoid = [], seed, footNote = null } = {}) {
   requireRag();
   const slot = planInterestSlot({ interestKey, seed });
+  // Set when Studio will put examples under this email, so the body can say so.
+  if (footNote) slot.footNote = footNote;
 
   const batch = await engineFor(`lane:${interestKey}`).generateBatch({
     count: 1,

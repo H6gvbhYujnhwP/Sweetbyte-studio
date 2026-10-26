@@ -63,6 +63,10 @@ VOICE
 ${HARD_RULES}`;
 }
 
+// `afterTheEmail` is present only when Studio will add an examples line under
+// the email (see keepwarm-examples.js), so the body can mention it. Left out of
+// the JSON entirely otherwise, so an email with no examples is never told to
+// promise some.
 function slotBlock(slot) {
   return JSON.stringify({
     area: slot.angle,
@@ -71,7 +75,12 @@ function slotBlock(slot) {
     ctaPrompt: slot.ctaPrompt,
     openingMove: slot.openingMove,
     ctaMode: slot.ctaMode,
+    afterTheEmail: slot.footNote || undefined,
   });
+}
+
+function footNoteBlock(footNote) {
+  return footNote ? `\nWHAT FOLLOWS THE EMAIL\n${footNote}\n` : '';
 }
 
 // One worked example of the required shape, built from the real paragraph
@@ -142,7 +151,7 @@ ${rejectedSubjects.length ? rejectedSubjects.map(x => `- ${x}`).join('\n') : '- 
 The new subject must begin exactly "${SUBJECT_PREFIX}". After that prefix it must match what the body actually says, be specific and human, under 48 characters, factually supported, materially different from every rejected subject, and free of hype, urgency, exclamation marks and emoji. Use UK English and write Sweetbyte exactly like that.`;
 }
 
-export function buildBodyRewritePrompt({ knowledgeBase, subject, plainBody }) {
+export function buildBodyRewritePrompt({ knowledgeBase, subject, plainBody, footNote = null }) {
   return `Rewrite the body while keeping the subject exactly unchanged. Return one JSON email object only with keys angle, subject, html and plain.
 
 KNOWLEDGE BASE
@@ -155,7 +164,7 @@ CURRENT BODY
 ${plainBody}
 
 The rewrite must stay on the same topic and deliver what the subject promises. Do not reuse its sentences. Return the fixed subject back unchanged, character for character.
-
+${footNoteBlock(footNote)}
 THE REQUIRED SHAPE
 ${SHAPE_EXAMPLE}
 
@@ -171,7 +180,7 @@ ${HARD_RULES}`;
  * prefix added on the front, so the prompt says so in terms, and the validator
  * skips its subject checks entirely when a fixed subject is supplied.
  */
-export function buildFromSubjectPrompt({ knowledgeBase, subject, doNotRepeat = [] }) {
+export function buildFromSubjectPrompt({ knowledgeBase, subject, doNotRepeat = [], footNote = null }) {
   return `Write the one email that belongs under a subject line that has already been written by hand. Return one JSON email object only with keys angle, subject, html and plain.
 
 KNOWLEDGE BASE
@@ -185,7 +194,7 @@ ${subject}
 The subject line was written by a person and is not yours to improve, shorten, punctuate differently or reword in any way. Return it back exactly as given, character for character, including any punctuation you would not have chosen. It already carries the standing prefix; do not add a second one.
 
 The body must deliver what that subject promises. If the subject is a joke or a complaint about IT frustration, the first line must land that recognition before it says anything about Sweetbyte.
-
+${footNoteBlock(footNote)}
 ANGLES ALREADY USED — do not retread these
 ${doNotRepeat.length ? doNotRepeat.map(value => `- ${value}`).join('\n') : '- None supplied'}
 
