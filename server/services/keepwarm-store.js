@@ -1957,6 +1957,43 @@ export function setDraftStatus(id, status) {
 }
 
 /**
+ * Move a draft to another type ('__none' for General IT support, or a service
+ * lane), keeping its wording exactly as it is.
+ *
+ * The type decides who the email can reach, so three things that belonged to
+ * the old type are cleared:
+ *   - approval, schedule position and pinned day: the operator approved it for
+ *     a different group of people, so it comes back to Review to be approved
+ *     again for the new one;
+ *   - the per-person ticks saved against it, which were a list of the old
+ *     type's people.
+ * Examples frozen onto it are the caller's to clear (they live in
+ * keepwarm-examples.js, which owns that table).
+ *
+ * Refuses a sent email (history), and returns null for one that is not there.
+ */
+export function setDraftInterest(id, interest) {
+  const row = getDraft(id);
+  if (!row) return null;
+  if (row.status === 'sent') return { error: 'already_sent' };
+  const next = String(interest || '').trim() || '__none';
+  if ((row.interest || '__none') === next) return row;
+
+  db.prepare(`
+    UPDATE keepwarm_drafts
+       SET interest          = ?,
+           status            = CASE WHEN status = 'approved' THEN 'draft' ELSE status END,
+           approved_at       = NULL,
+           schedule_position = NULL,
+           send_on           = NULL,
+           skipped           = NULL
+     WHERE id = ?
+  `).run(next, row.id);
+
+  return getDraft(row.id);
+}
+
+/**
  * Subjects and angles already used, newest first. Fed back into the generator
  * so a later batch cannot rewrite an email that has already gone out. Rejected
  * drafts are included on purpose: the operator turning one down is a signal

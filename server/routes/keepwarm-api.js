@@ -38,6 +38,7 @@ import {
   insertDrafts,
   listDrafts,
   getDraft,
+  setDraftInterest,
   updateDraft,
   setDraftStatus,
   moveDraftInSchedule,
@@ -88,6 +89,7 @@ import {
   examplesForDraft,
   draftNeedsExamples,
   attachExamplesToDraft,
+  clearExamplesForDraft,
 } from '../services/keepwarm-examples.js';
 
 // What the screen needs to show the "no example sites" notice on a draft:
@@ -1233,6 +1235,40 @@ router.post('/drafts/:id/regenerate', async (req, res) => {
     });
   } catch (err) {
     console.error('[keepwarm] regenerate failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /drafts/:id/interest  { interest }  — '__none' or a service-lane key
+ *
+ * Move an email to another type without touching its wording. It comes back
+ * to Review (approval cleared) because the people it reaches have changed.
+ * Refused while that email is being sent.
+ */
+router.put('/drafts/:id/interest', (req, res) => {
+  try {
+    const raw = String((req.body || {}).interest || '').trim();
+    const interest = !raw || raw === 'general' ? '__none' : raw;
+    if (!isLaneKey(interest)) return res.status(400).json({ error: 'That is not an email type Studio knows.' });
+
+    const running = activeRun();
+    if (running && running.draft_id === req.params.id) {
+      return res.status(409).json({ error: 'That email is being sent right now, so its type cannot change.' });
+    }
+
+    const before = getDraft(req.params.id);
+    const result = setDraftInterest(req.params.id, interest);
+    if (!result) return res.status(404).json({ error: 'That email is not there any more.' });
+    if (result.error === 'already_sent') return res.status(409).json({ error: 'That email has already been sent.' });
+
+    // Examples belong to the type they were picked for. Moving away drops them;
+    // a Website email arriving without any gets the "Add example sites" notice.
+    if ((before.interest || '__none') !== interest) clearExamplesForDraft(result.id);
+
+    res.json({ draft: result, ...examplesState(result) });
+  } catch (err) {
+    console.error('[keepwarm] change draft type failed:', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -2078,7 +2078,7 @@ function TypePicker({ types, selected, onSelect, drafts, approved }) {
 
 // Step 2. Every draft not yet approved. The bin sits under a small link at the
 // bottom so binned emails are out of the way but can still be brought back.
-function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin, onRestore, onEmptyBin, emptying, laneData, scheduledSlots }) {
+function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin, onRestore, onEmptyBin, emptying, laneData, scheduledSlots, onSetType }) {
   const [showBin, setShowBin] = useState(false);
   const [type, setType] = useState('all');
   const note = waiting.length
@@ -2132,6 +2132,23 @@ function ReviewColumn({ waiting, binned, need, busyId, onRead, onApprove, onBin,
           <LaneTag interest={d.interest} />
           <TileSubject>{d.subject}</TileSubject>
           {d.edited ? <div style={{ fontSize: 11.5, color: TERTIARY }}>edited</div> : null}
+          {/* Which type this email is — who it goes to. Changing it keeps the
+              wording and moves it to that type's people only. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: MUTED, margin: '2px 0 6px' }}>
+            Type
+            <select
+              value={d.interest || '__none'}
+              disabled={busyId === d.id}
+              onChange={(e) => onSetType(d.id, e.target.value)}
+              aria-label="Which type of email this is"
+              style={{
+                fontSize: 12, padding: '2px 6px', border: `1px solid ${BORDER}`, borderRadius: 6,
+                fontFamily: 'inherit', background: CARD, color: TEXT, maxWidth: 200,
+              }}
+            >
+              {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </label>
           <TileActions>
             <Button style={SMALL} onClick={() => onRead(d)}>Read</Button>
             <Button style={SMALL} tone="primary" disabled={busyId === d.id} onClick={() => onApprove(d.id)}>Approve</Button>
@@ -3223,6 +3240,28 @@ export default function KeepWarm() {
     }
   }
 
+  // Move an email to another type (Review only). Its wording stays; it comes
+  // back unapproved because the people it reaches have changed.
+  async function setDraftType(id, interest) {
+    setBusyId(id);
+    try {
+      const r = await fetch(`/api/keepwarm/drafts/${id}/interest`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interest }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not change the type');
+      await loadDrafts();
+      await loadSchedule();
+      await loadLaneData();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function setStatus(id, status) {
     setBusyId(id);
     try {
@@ -3738,6 +3777,7 @@ export default function KeepWarm() {
                   emptying={emptying}
                   laneData={laneData}
                   scheduledSlots={schedule ? schedule.slots : []}
+                  onSetType={setDraftType}
                 />
                 <SendColumn
                   data={schedule}

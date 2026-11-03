@@ -506,6 +506,17 @@ export function examplesHtml(frozen) {
 }
 
 /**
+ * Take the examples off a draft. Used when a draft is moved to another type:
+ * a Website email's sites must not follow it into Custom apps, and the next
+ * type's examples (if it takes any) are attached fresh.
+ */
+export function clearExamplesForDraft(draftId) {
+  const id = String(draftId || '').trim();
+  if (!id) return;
+  db.prepare('DELETE FROM keepwarm_draft_examples WHERE draft_id = ?').run(id);
+}
+
+/**
  * True when a draft must carry examples and does not: a Website email, not yet
  * sent, with nothing frozen onto it. The screen shows a notice and an "Add
  * example sites" button for these, and the sender refuses to send one.
