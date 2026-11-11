@@ -44,6 +44,8 @@ import {
   queueServiceEmail,
   cancelSend,
   cancelPendingForCompany,
+  cancelFollowup,
+  followupStateFor,
   historyForCompany,
   sentServiceKeys,
   isSuppressed,
@@ -109,7 +111,10 @@ router.get('/catalogue', requireBridgeAuth, (req, res) => {
 /**
  * POST /api/service-emails/send
  * Body: { externalCompanyId, companyName, contactName, spokeTo, referrerName,
- *         toEmail, services: [key] }
+ *         toEmail, services: [key], followup }
+ *
+ * `followup` is true only when the caller ticked "Follow up in 7 days". Missing
+ * or anything other than true books no follow-up.
  *
  * `spokeTo` is 'them' | 'someone_else' | 'nobody' and decides the email's
  * opening. It is optional on the wire: an older WorkTrackr omits it, and the
@@ -122,12 +127,13 @@ router.get('/catalogue', requireBridgeAuth, (req, res) => {
 router.post('/send', requireBridgeAuth, (req, res) => {
   const {
     externalCompanyId, companyName, contactName,
-    referrerName, spokeTo, toEmail, services,
+    referrerName, spokeTo, toEmail, services, followup,
   } = req.body || {};
 
   const result = queueServiceEmail({
     externalCompanyId, companyName, contactName,
     referrerName, spokeTo, toEmail, services,
+    followup: followup === true,
   });
 
   if (!result.ok) {
@@ -143,6 +149,7 @@ router.post('/send', requireBridgeAuth, (req, res) => {
     services: result.services,
     skipped: result.skipped,
     sendAfter: result.sendAfter,
+    followup: result.followup,
   });
 });
 
@@ -175,6 +182,20 @@ router.post('/cancel-followups', requireBridgeAuth, (req, res) => {
 });
 
 /**
+ * POST /api/service-emails/cancel-followup
+ * Body: { externalCompanyId, email }
+ * The Cancel button on WorkTrackr's follow-up line. `cancelled: 0` means it
+ * had already gone or there wasn't one — not an error.
+ */
+router.post('/cancel-followup', requireBridgeAuth, (req, res) => {
+  const { externalCompanyId, email } = req.body || {};
+  if (!externalCompanyId) return res.status(400).json({ error: 'externalCompanyId required' });
+  if (!email) return res.status(400).json({ error: 'email required' });
+
+  res.json(cancelFollowup(externalCompanyId, email));
+});
+
+/**
  * GET /api/service-emails/status?externalCompanyId=…&email=…
  * Send history for a company, plus the services already used against a given
  * address. WorkTrackr keeps its own mirror for rendering speed; this is the
@@ -188,6 +209,10 @@ router.get('/status', requireBridgeAuth, (req, res) => {
     history: historyForCompany(externalCompanyId),
     sentServices: email ? sentServiceKeys(externalCompanyId, email) : [],
     suppressed: email ? isSuppressed(email) : false,
+    // The follow-up line for this address: due / sent / cancelled / none.
+    followup: email
+      ? followupStateFor(externalCompanyId, email)
+      : { state: 'none', dueAt: null, sentAt: null },
   });
 });
 

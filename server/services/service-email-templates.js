@@ -65,16 +65,6 @@ export function normaliseSpokeTo(spokeTo, referrerName) {
   return String(referrerName || '').trim() ? 'someone_else' : 'them';
 }
 
-/**
- * Follow-up copy has not been written yet. While this is false the sender will
- * not schedule a step-2 row at all, so there is no way for an empty follow-up
- * to reach a prospect. Flip to true in the same commit that fills in
- * FOLLOWUP_BODY and FOLLOWUP_SUBJECT below — not before.
- */
-export const FOLLOWUP_READY = false;
-
-const FOLLOWUP_SUBJECT = ''; // TODO: follow-up subject line
-const FOLLOWUP_BODY    = ''; // TODO: follow-up body, same HTML shape as BODY
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Copy
@@ -184,6 +174,50 @@ const CLOSING_REFERRAL = `
   <p style="${P_STYLE}">{{Thanks}} and hopefully we'll speak soon.</p>
 `;
 
+
+/**
+ * The follow-up — one email, seven days after the introduction, and only when
+ * the caller ticked "Follow up in 7 days" in WorkTrackr for that send.
+ *
+ * FOLLOWUP_READY was false until this copy existed; it was flipped in the same
+ * commit that filled the copy in, as the rule required. It now means "the
+ * follow-up is available". Whether one is actually booked is decided per send
+ * by the tick box (service_email_sends.followup_wanted) — no tick, no follow-up.
+ *
+ * The wording works whether or not the caller spoke to the recipient, so unlike
+ * the introduction it has one version, not three. No brochure: that rides on
+ * the introduction only. Same signature and unsubscribe footer as the intro.
+ *
+ * The subject is the introduction's own subject with "Re: " in front, and the
+ * sender threads the message under the introduction, so it sits underneath it
+ * in the recipient's inbox — which is what makes "my email from last week" read
+ * naturally rather than as a trick.
+ */
+export const FOLLOWUP_READY = true;
+
+const FOLLOWUP_BODY = `
+  <p style="${P_STYLE}">Hi [NAME],</p>
+
+  <p style="${P_STYLE}">I just wanted to follow up on my email from last week, in case it got
+  buried in a busy inbox.</p>
+
+  <p style="${P_STYLE}">As a quick reminder, we're Sweetbyte, a local IT company in Essex. We look
+  after everything from day-to-day IT support and Microsoft 365 through to cyber
+  security, websites and business phones, and we don't tie anyone into long
+  contracts.</p>
+
+  <p style="${P_STYLE}">Even if everything is running smoothly right now, it's always handy to have
+  a local team you can call on when something does crop up.</p>
+
+  <p style="${P_STYLE}">If it would be useful, I'd be happy to have a quick chat about your current
+  setup, or pop over to introduce myself, whichever suits you best. No pressure
+  at all.</p>
+
+  <p style="${P_STYLE}">Feel free to reply with a day or time that works for you, or you can reach
+  me on 01702 540776.</p>
+
+  <p style="${P_STYLE}">Thanks, and hopefully speak soon.</p>
+`;
 
 // The signature used to be a const here, as a second copy of the one in
 // keepwarm-generator.js. Both are gone: there is one in
@@ -305,20 +339,18 @@ function buildVars({ companyName, contactName, referrerName, senderName }) {
  *   with a contact name → "Dave - Sweetbyte Introduction"
  *   without one         → "Sweetbyte Introduction"
  *
+ *   follow-up (step 2)  → the same, with "Re: " in front
+ *
  * Note this deliberately does NOT use the "there" fallback: "there - Sweetbyte
  * Introduction" in an inbox would look broken.
  */
 export function buildSubject(serviceKeys, step, { companyName, contactName, senderName } = {}) {
-  if (step === 2) {
-    const vars = buildVars({ companyName, contactName, senderName });
-    return String(FOLLOWUP_SUBJECT)
-      .replace(/\[NAME\]/g, vars.firstName)
-      .replace(/\{\{SenderName\}\}/g, vars.senderName)
-      .replace(/\{\{CompanyName\}\}/g, vars.companyName);
-  }
-
   const name = firstNameOrNull(contactName);
-  return name ? `${name} - Sweetbyte Introduction` : 'Sweetbyte Introduction';
+  const intro = name ? `${name} - Sweetbyte Introduction` : 'Sweetbyte Introduction';
+
+  // The follow-up replies to the introduction, so it carries the same subject
+  // with "Re: " in front — "Re: Dave - Sweetbyte Introduction".
+  return step === 2 ? `Re: ${intro}` : intro;
 }
 
 /**

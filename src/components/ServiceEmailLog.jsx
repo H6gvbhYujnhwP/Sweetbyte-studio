@@ -8,9 +8,11 @@
 // debugging and useless for a sales team. Every send is already recorded in
 // service_email_sends; this just shows it.
 //
-// Read-only on purpose. Resending would have to clear the dedup row first or it
-// would refuse itself, and a resend button that silently does nothing is worse
-// than no button. If resend is wanted later it needs designing properly.
+// Read-only on purpose, with one exception: the "Follow-ups due" list at the
+// top has a Cancel per row. Replies go to Outlook, which Studio cannot see, so
+// this is where a follow-up to someone who has already answered gets stopped.
+// Resending would have to clear the dedup row first or it would refuse itself,
+// and a resend button that silently does nothing is worse than no button.
 //
 // Auto-refreshes every 20s so a send made in WorkTrackr appears here without a
 // manual reload — the common case is having this open on a second monitor while
@@ -87,6 +89,111 @@ const TD = {
   borderBottom: `1px solid ${BORDER}`, verticalAlign: 'top',
 };
 
+// "Today", "Tomorrow", else "Fri 14 Nov". Compared in UK local days, because
+// that is how the operator reads the list over a morning coffee.
+function dueLabel(iso) {
+  if (!iso) return '—';
+  const d = new Date(`${iso.replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  const day = (x) => x.toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 86400000);
+  if (day(d) <= day(now)) return 'Today';
+  if (day(d) === day(tomorrow)) return 'Tomorrow';
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/London' });
+}
+
+function DueRow({ r, confirming, busy, onAsk, onConfirm, onKeep }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      padding: '10px 14px', borderTop: `1px solid ${BORDER}`, flexWrap: 'wrap',
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: TEXT }}>
+          <span style={{ fontWeight: 700 }}>{dueLabel(r.dueAt)}</span>
+          {' · '}{r.companyName || '—'}
+          {r.contactName && <span style={{ color: MUTED }}> ({r.contactName})</span>}
+        </div>
+        <div style={{ fontSize: 12, color: TERTIARY, wordBreak: 'break-all' }}>
+          {r.toEmail} · intro sent {when(r.introSentAt)}
+        </div>
+      </div>
+      {confirming ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: MUTED }}>Stop this follow-up?</span>
+          <button type="button" onClick={onConfirm} disabled={busy} style={{
+            background: DANGER, color: '#fff', border: 'none', borderRadius: 6,
+            padding: '5px 11px', fontSize: 12, fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+          }}>{busy ? 'Cancelling…' : 'Yes, cancel it'}</button>
+          <button type="button" onClick={onKeep} disabled={busy} style={{
+            background: 'transparent', color: MUTED, border: `1px solid ${BORDER}`, borderRadius: 6,
+            padding: '5px 11px', fontSize: 12, cursor: 'pointer',
+          }}>Keep</button>
+        </div>
+      ) : (
+        <button type="button" onClick={onAsk} style={{
+          background: 'transparent', color: DANGER, border: `1px solid ${DANGER}`, borderRadius: 6,
+          padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+        }}>Cancel</button>
+      )}
+    </div>
+  );
+}
+
+function FollowupsDue({ rows, error, onCancelled }) {
+  const [confirmId, setConfirmId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState(null);
+
+  const cancel = async (id) => {
+    setBusyId(id);
+    setNote(null);
+    try {
+      const r = await fetch(`/api/service-email-log/followups/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+      if (r.status === 409) setNote('Too late, that follow-up has already gone.');
+      else if (!r.ok) setNote('Could not cancel that follow-up. Try again.');
+    } catch {
+      setNote('Could not cancel that follow-up. Try again.');
+    } finally {
+      setBusyId(null);
+      setConfirmId(null);
+      onCancelled();
+    }
+  };
+
+  return (
+    <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, marginBottom: 20, overflow: 'hidden' }}>
+      <div style={{ padding: '12px 14px' }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: SB.dark }}>
+          Follow-ups due{rows.length ? ` (${rows.length})` : ''}
+        </div>
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+          Replies go to Outlook, not here. If any of these have replied, cancel them.
+        </div>
+        {note && <div style={{ fontSize: 12, color: DANGER, marginTop: 6 }}>{note}</div>}
+      </div>
+      {error ? (
+        <div style={{ padding: '10px 14px', borderTop: `1px solid ${BORDER}`, fontSize: 13, color: DANGER }}>{error}</div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: '10px 14px', borderTop: `1px solid ${BORDER}`, fontSize: 13, color: MUTED }}>
+          No follow-ups waiting to go.
+        </div>
+      ) : rows.map((r) => (
+        <DueRow
+          key={r.id}
+          r={r}
+          confirming={confirmId === r.id}
+          busy={busyId === r.id}
+          onAsk={() => setConfirmId(r.id)}
+          onKeep={() => setConfirmId(null)}
+          onConfirm={() => cancel(r.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function Row({ r }) {
   return (
     <tr>
@@ -99,6 +206,9 @@ function Row({ r }) {
       <td style={{ ...TD, wordBreak: 'break-all' }}>{r.toEmail}</td>
       <td style={TD}>
         <StatusPill status={r.status} />
+        {r.step === 2 && (
+          <div style={{ fontSize: 11, color: TERTIARY, marginTop: 4 }}>Follow-up</div>
+        )}
         {r.status === 'failed' && r.error && (
           <div style={{ fontSize: 12, color: DANGER, marginTop: 4, maxWidth: 380 }}>
             {r.error}
@@ -121,6 +231,22 @@ export default function ServiceEmailLog() {
   const [error, setError] = useState(null);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
+  const [due, setDue] = useState([]);
+  const [dueError, setDueError] = useState(null);
+
+  // Loaded separately from the log so the log's filters never hide a follow-up
+  // that is about to go.
+  const loadDue = useCallback(async () => {
+    try {
+      const r = await fetch('/api/service-email-log/followups-due');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setDue(d.rows || []);
+      setDueError(null);
+    } catch {
+      setDueError('Could not load follow-ups due.');
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -151,6 +277,12 @@ export default function ServiceEmailLog() {
     const t = setInterval(load, REFRESH_MS);
     return () => clearInterval(t);
   }, [load]);
+
+  useEffect(() => {
+    loadDue();
+    const t = setInterval(loadDue, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [loadDue]);
 
   return (
     <div style={{ flex: 1, overflow: 'auto', background: BG, padding: '24px 28px' }}>
@@ -184,6 +316,8 @@ export default function ServiceEmailLog() {
           The reason is shown against each one below.
         </div>
       )}
+
+      <FollowupsDue rows={due} error={dueError} onCancelled={() => { loadDue(); load(); }} />
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <input

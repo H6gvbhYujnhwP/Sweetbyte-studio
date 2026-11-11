@@ -7,13 +7,16 @@
  * the two auth models in one router is how a bridge endpoint accidentally ends
  * up reachable from a browser session, or vice versa.
  *
- * Read-only by design. Nothing here resends, cancels or edits — the log tells
- * you what happened, and anything that changes state stays with the bridge.
+ * Read-only, with ONE exception: cancelling a follow-up from the "Follow-ups
+ * due" list. Studio cannot see replies (they land in Outlook), so this list is
+ * where the operator stops a follow-up to someone who has already answered.
+ * Nothing here resends or edits, and a sent email cannot be cancelled.
  */
 
 import express from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { listDueFollowups, cancelFollowupById } from '../services/service-email-sender.js';
 
 const router = express.Router();
 
@@ -96,6 +99,34 @@ router.get('/recent', (req, res) => {
   } catch (err) {
     console.error('[service-email-log] recent failed:', err.message);
     res.status(500).json({ error: 'Could not load the service email log' });
+  }
+});
+
+/**
+ * GET /api/service-email-log/followups-due
+ * Every follow-up still waiting to go, soonest first.
+ */
+router.get('/followups-due', (req, res) => {
+  try {
+    res.json({ rows: listDueFollowups() });
+  } catch (err) {
+    console.error('[service-email-log] followups-due failed:', err.message);
+    res.status(500).json({ error: 'Could not load follow-ups due' });
+  }
+});
+
+/**
+ * POST /api/service-email-log/followups/:id/cancel
+ * 409 too_late means it has already gone.
+ */
+router.post('/followups/:id/cancel', (req, res) => {
+  try {
+    const result = cancelFollowupById(req.params.id);
+    if (!result.ok) return res.status(409).json({ error: result.reason });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[service-email-log] cancel follow-up failed:', err.message);
+    res.status(500).json({ error: 'Could not cancel that follow-up' });
   }
 });
 

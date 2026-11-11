@@ -12,8 +12,8 @@ Single source of truth for the contract; both sides should be changed together.
 
 After a cold call, the salesperson types the address they were just given into
 the company record, taps one or more services, and taps Send. WorkTrackr hands
-the details to Studio; Studio sends the email and, 7 days later, sends a
-follow-up about the same services without anyone touching it.
+the details to Studio; Studio sends the email. If the caller ticked "Follow up
+in 7 days", Studio sends ONE follow-up 7 days later. No tick, no follow-up.
 
 Multi-select produces **one merged email**, not one per service — each service
 contributes a block, blocks render in canonical order, with a single greeting
@@ -60,7 +60,7 @@ second service is ever wanted.
 | Subject, named contact | `Dave - Sweetbyte Introduction` |
 | Subject, no contact name | `Sweetbyte Introduction` |
 | Attachment | `server/assets/Sweetbyte-Brochure.pdf`, ~4.2MB |
-| Follow-up | **Not written.** `FOLLOWUP_READY = false` |
+| Follow-up | Opt-in per send (tick box). Subject `Re: <intro subject>`, threaded under the intro, no brochure |
 
 The subject deliberately drops the name rather than falling back to "there" —
 "there - Sweetbyte Introduction" in an inbox looks broken. The body still uses
@@ -97,14 +97,26 @@ Attachment filenames go out as plain ASCII. RFC 2047 (`=?UTF-8?B?...?=`) is not
 valid in a `filename` parameter and spec-following clients display the encoded
 string as the attachment name — an early version of this code had that bug.
 
-### Follow-ups
+### Follow-ups (opt-in, Nov 2026)
 
-`FOLLOWUP_READY` in the templates file gates scheduling entirely: while it is
-false, `processDue()` never writes a step-2 row, so an empty follow-up cannot
-reach anyone. Flip it to true in the same commit that fills in
-`FOLLOWUP_SUBJECT` and `FOLLOWUP_BODY` — not before. Whether the brochure
-should ride along on the follow-up is undecided; it currently would not, since
-only step 1 attaches.
+`FOLLOWUP_READY` is now `true` — the copy is in `service-email-templates.js`.
+Whether a follow-up is booked is decided **per send** by the WorkTrackr tick
+box: `/send` with `followup: true` sets `followup_wanted = 1` on the intro row.
+Only a literal `true` opts in; missing (older WorkTrackr) books nothing.
+
+`followup_wanted`: 0 not wanted (default, and every pre-existing row) · 1 wanted
+· 2 wanted then cancelled before the step-2 row existed. The step-2 row is booked
+7 days after the intro actually went out; `scheduleFollowup` re-reads the flag
+so a Cancel pressed mid-send still wins. One follow-up per intro, ever.
+
+The follow-up threads under the intro (`In-Reply-To`/`References` built from the
+intro's stored SES id as `<id@<region>.amazonses.com>`, `email.amazonses.com` in
+us-east-1). The brochure rides on the intro only.
+
+Stopping one: Cancel on WorkTrackr's panel (`POST /cancel-followup`), Cancel on
+Studio's Service Emails page ("Follow-ups due" list), stage change to
+dead/customer, or the recipient unsubscribing. Studio cannot see replies — they
+go to Outlook — so the due list is the daily check.
 
 Capitalisation is fixed up in `firstNameOrNull()` because the name is typed in a
 hurry between calls: "tony" → "Tony", and an ALL-CAPS entry is downcased first
@@ -244,9 +256,10 @@ approved body, adds a heading to each, and replaces only the connective wording
 { "externalCompanyId": "<WorkTrackr contacts.id>",
   "companyName": "Acme Ltd", "contactName": "Dave Smith",
   "spokeTo": "someone_else", "referrerName": "Karen",
-  "toEmail": "dave@acme.co.uk", "services": ["it_support","voip_telephony"] }
+  "toEmail": "dave@acme.co.uk", "services": ["it_support","voip_telephony"],
+  "followup": true }
 ```
-→ `200 { id, services, skipped, sendAfter }`
+→ `200 { id, services, skipped, sendAfter, followup }`
 
 **`spokeTo`** decides the email's opening, closing and unsubscribe reason. It is
 chosen from a dropdown by whoever made the call and is one of exactly three
@@ -298,8 +311,18 @@ cannot be recalled — hence the window.
 Call from WorkTrackr's contacts PUT whenever a company moves to `dead` or
 `customer`. Fire-and-forget: log failures, never block the stage change.
 
+### `POST /cancel-followup`
+```json
+{ "externalCompanyId": "…", "email": "dave@acme.co.uk" }
+```
+→ `200 { ok: true, cancelled: <n> }`. `0` means already gone or none — not an error.
+
 ### `GET /status?externalCompanyId=…&email=…`
-→ `{ history: [...], sentServices: ["it_support"], suppressed: false }`
+→ `{ history: [...], sentServices: [...], suppressed: false,
+     followup: { state: "due"|"sent"|"cancelled"|"none", dueAt, sentAt } }`
+
+`followup` is for the most recent non-undone intro to that address. Times UTC
+`YYYY-MM-DD HH:MM:SS`. A failed or suppressed follow-up reports `cancelled`.
 
 Authoritative view. WorkTrackr keeps its own mirror table for render speed;
 this is for reconciliation and for the timeline entry.
@@ -323,9 +346,9 @@ fires the send; the ticker sweeps anything whose timeout was lost to a restart.
 Both paths claim the row with a conditional `UPDATE … WHERE status='queued'`, so
 it can only send once.
 
-**Follow-up.** Booked when the initial send succeeds, dated 7 days from the
-actual send rather than from the queue time, so an email delayed by an outage
-doesn't get a follow-up hard on its heels.
+**Follow-up.** Only when ticked. Booked when the initial send succeeds, dated 7
+days from the actual send rather than from the queue time, so an email delayed
+by an outage doesn't get a follow-up hard on its heels.
 
 **Suppression.** Re-checked at send time, not queue time — 7 days is plenty of
 time to opt out between the two emails. An address counts as suppressed if it's
@@ -335,9 +358,8 @@ back into the campaign side so one opt-out stops everything.
 
 **Copy is the approved brochure wording.** Service blocks come from *Sweetbyte
 Post Call Email Templates*, adapted from the Services A5 Brochure 2026. The
-day-7 follow-up reuses the same approved blocks and changes only the opening
-paragraph — no second set of service claims has been invented. Give a service a
-`followupHtml` to override that.
+day-7 follow-up has its own agreed copy (Nov 2026), one version for every
+`spokeTo` case, in `service-email-templates.js`.
 
 **No open/click tracking.** Every message is CC'd, so a tracking pixel fires
 from the CC's client and records an "open" the prospect never made. Worse than
@@ -380,11 +402,10 @@ at-import pattern, smaller blast radius. Fold them in if this feature grows.
 
 ## Known gaps
 
-1. **A reply does not cancel the follow-up.** `imap-poller.js` auto-unsubscribes
-   on reply, but only for rows matched to a campaign *subscriber*. Service-email
-   recipients aren't subscribers, so nothing matches and the follow-up still
-   goes. Fixable by having the poller check `service_email_sends` by recipient
-   address on unmatched replies. Not built.
+1. **A reply does not cancel the follow-up.** Replies land in Billy's Outlook,
+   which Studio's IMAP poller (Gmail inboxes only) does not read. Handled by
+   the "Follow-ups due" list with Cancel on the Service Emails page, and Cancel
+   on WorkTrackr's panel.
 2. **SQLite durability.** Follow-ups live on the Render disk for 7 days. They
    survive restarts and deploys, not disk loss.
 3. **DNS.** Until the Sweetbyte domain points at Render, unsubscribe links use

@@ -4,7 +4,17 @@
  *
  * WorkTrackr hands over an address, a company, and a set of services. This
  * module owns everything after that: the 10-second undo window, the send
- * itself, the 7-day follow-up, dedupe, and suppression.
+ * itself, the opt-in 7-day follow-up, dedupe, and suppression.
+ *
+ * FOLLOW-UPS ARE OPT-IN PER SEND
+ * A follow-up is booked only when WorkTrackr sent `followup: true` with the
+ * introduction — the caller ticked "Follow up in 7 days". The choice is stored
+ * on the introduction's row as followup_wanted:
+ *   0  not wanted (the default, and every row from before this existed)
+ *   1  wanted — a step-2 row is booked once the introduction actually goes out
+ *   2  wanted, then cancelled before the step-2 row existed (inside the undo
+ *      window, or while the introduction was mid-send)
+ * Exactly one follow-up per introduction, ever. Nothing is booked after it.
  *
  * WHY THE SCHEMA LIVES HERE AND NOT IN db.js
  * Every other table in this codebase is declared in server/db.js. These two
@@ -198,6 +208,7 @@ db.exec(`
     parent_id           TEXT,
     referrer_name       TEXT,
     spoke_to            TEXT,
+    followup_wanted     INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -231,6 +242,12 @@ try {
       console.log(`[service-email] added ${col} column`);
     }
   }
+  // Existing rows get 0 — no follow-up. Nothing sent before the tick box
+  // existed was ever opted in, so nothing old suddenly grows a follow-up.
+  if (!cols.includes('followup_wanted')) {
+    db.exec(`ALTER TABLE service_email_sends ADD COLUMN followup_wanted INTEGER NOT NULL DEFAULT 0`);
+    console.log('[service-email] added followup_wanted column');
+  }
 } catch (err) {
   console.error('[service-email] column migration failed:', err.message);
 }
@@ -243,6 +260,28 @@ const normEmail = (e) => String(e || '').trim().toLowerCase();
 
 function nowIso() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// SQLite stores 'YYYY-MM-DD HH:MM:SS' in UTC with no zone marker.
+function plusSecondsFrom(sqliteTime, seconds) {
+  const base = new Date(String(sqliteTime).replace(' ', 'T') + 'Z');
+  if (Number.isNaN(base.getTime())) return null;
+  return new Date(base.getTime() + seconds * 1000)
+    .toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// The Message-ID header SES actually puts on a message, from the bare id its
+// API returns. Needed to thread the follow-up under the introduction. SES
+// writes "<id@email.amazonses.com>" in us-east-1 and "<id@<region>.amazonses.com>"
+// everywhere else — the IMAP poller sees the eu-north-1 form on real replies.
+// Same variable and default as ses.js.
+const SES_REGION = process.env.AWS_SES_REGION || 'eu-north-1';
+function sesMessageIdHeader(bareId) {
+  const id = String(bareId || '').trim().replace(/[<>]/g, '');
+  if (!id) return null;
+  if (id.includes('@')) return `<${id}>`;
+  const domain = SES_REGION === 'us-east-1' ? 'email.amazonses.com' : `${SES_REGION}.amazonses.com`;
+  return `<${id}@${domain}>`;
 }
 
 function isoPlusSeconds(seconds) {
@@ -473,6 +512,7 @@ export function queueServiceEmail({
   spokeTo,
   toEmail,
   services,
+  followup,
 }) {
   const email = normEmail(toEmail);
   if (!email) return { ok: false, reason: 'no_email' };
@@ -495,8 +535,8 @@ export function queueServiceEmail({
   db.prepare(`
     INSERT INTO service_email_sends
       (id, external_company_id, company_name, contact_name, referrer_name,
-       spoke_to, to_email, services_json, step, status, send_after)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'queued', ?)
+       spoke_to, to_email, services_json, step, status, send_after, followup_wanted)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'queued', ?, ?)
   `).run(
     id,
     String(externalCompanyId),
@@ -511,6 +551,9 @@ export function queueServiceEmail({
     email,
     JSON.stringify(fresh),
     sendAfter,
+    // Only a literal true opts in. Anything else — missing (an older
+    // WorkTrackr), false, "yes", 1 — books nothing. No yes, no follow-up.
+    followup === true ? 1 : 0,
   );
 
   // Fire promptly rather than waiting up to a full ticker interval. The ticker
@@ -520,7 +563,11 @@ export function queueServiceEmail({
       console.error('[service-email] post-undo send failed:', err && err.stack || err));
   }, UNDO_SECONDS * 1000 + 500).unref?.();
 
-  return { ok: true, id, services: fresh, sendAfter, skipped: keys.filter(k => already.has(k)) };
+  return {
+    ok: true, id, services: fresh, sendAfter,
+    skipped: keys.filter(k => already.has(k)),
+    followup: followup === true,
+  };
 }
 
 /**
@@ -559,6 +606,14 @@ export function cancelPendingForCompany(externalCompanyId, reason = 'stage chang
        SET status = 'cancelled', error = ?
      WHERE external_company_id = ? AND status = 'queued'
   `).run(String(reason), String(externalCompanyId));
+
+  // An introduction caught mid-send can't be stopped, but its follow-up can:
+  // without this it would book one the moment the send finished.
+  db.prepare(`
+    UPDATE service_email_sends SET followup_wanted = 2
+     WHERE external_company_id = ? AND step = 1 AND followup_wanted = 1 AND status = 'sending'
+  `).run(String(externalCompanyId));
+
   return { ok: true, cancelled: res.changes };
 }
 
@@ -612,6 +667,15 @@ export async function processDue() {
       continue;
     }
 
+    // The follow-up threads under the introduction it follows.
+    let threadId = null;
+    if (row.step === 2 && row.parent_id) {
+      const parent = db.prepare(
+        'SELECT message_id FROM service_email_sends WHERE id = ?'
+      ).get(row.parent_id);
+      threadId = sesMessageIdHeader(parent && parent.message_id);
+    }
+
     try {
       const htmlBody = renderServiceEmail({
         serviceKeys: services,
@@ -652,7 +716,10 @@ export async function processDue() {
           senderName: SENDER_NAME,
         }),
         htmlBody,
-        attachments: BROCHURE ? [BROCHURE] : [],
+        // The brochure goes with the introduction only, never the follow-up.
+        attachments: (row.step === 1 && BROCHURE) ? [BROCHURE] : [],
+        inReplyTo: threadId,
+        references: threadId,
         inlineImages: signatureImages(),
       });
 
@@ -667,7 +734,9 @@ export async function processDue() {
       // that SES rejected.
       addToList(row.to_email, row.contact_name);
 
-      if (row.step === 1 && FOLLOWUP_READY) scheduleFollowup(row, services);
+      if (row.step === 1 && FOLLOWUP_READY && row.followup_wanted === 1) {
+        scheduleFollowup(row, services);
+      }
     } catch (err) {
       console.error('[service-email] send failed:', row.id, err.message);
       db.prepare(`
@@ -694,6 +763,13 @@ function scheduleFollowup(parentRow, services) {
   ).get(parentRow.id);
   if (existing) return;
 
+  // Re-read the choice rather than trusting the row processDue loaded: the
+  // caller may have pressed Cancel while the introduction was being sent.
+  const fresh = db.prepare(
+    'SELECT followup_wanted FROM service_email_sends WHERE id = ?'
+  ).get(parentRow.id);
+  if (!fresh || fresh.followup_wanted !== 1) return;
+
   // referrer_name and spoke_to are carried across. Without them the follow-up
   // would fall back to 'them' and reintroduce the "we spoke" claim seven days
   // after the first email carefully avoided it.
@@ -714,4 +790,113 @@ function scheduleFollowup(parentRow, services) {
     isoPlusSeconds(FOLLOWUP_DAYS * 24 * 60 * 60),
     parentRow.id,
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Follow-up state and cancelling
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The follow-up line WorkTrackr shows for one address at one company, from the
+ * most recent introduction to that address (an undone one doesn't count).
+ *
+ *   { state: 'due' | 'sent' | 'cancelled' | 'none', dueAt, sentAt }
+ *
+ * A follow-up that failed or was suppressed reports as 'cancelled' — it is not
+ * going out, and the Service Emails log in Studio says why.
+ */
+export function followupStateFor(externalCompanyId, email) {
+  const none = { state: 'none', dueAt: null, sentAt: null };
+  const e = normEmail(email);
+  if (!externalCompanyId || !e) return none;
+
+  const intro = db.prepare(`
+    SELECT id, status, send_after, followup_wanted
+      FROM service_email_sends
+     WHERE external_company_id = ? AND lower(to_email) = ? AND step = 1
+       AND status != 'cancelled'
+     ORDER BY created_at DESC, rowid DESC
+     LIMIT 1
+  `).get(String(externalCompanyId), e);
+  if (!intro) return none;
+
+  const child = db.prepare(`
+    SELECT status, send_after, sent_at FROM service_email_sends
+     WHERE parent_id = ? ORDER BY created_at DESC LIMIT 1
+  `).get(intro.id);
+
+  if (child) {
+    if (child.status === 'queued' || child.status === 'sending') {
+      return { state: 'due', dueAt: child.send_after, sentAt: null };
+    }
+    if (child.status === 'sent') return { state: 'sent', dueAt: child.send_after, sentAt: child.sent_at };
+    return { state: 'cancelled', dueAt: null, sentAt: null };
+  }
+
+  if (intro.followup_wanted === 2) return { state: 'cancelled', dueAt: null, sentAt: null };
+  if (intro.followup_wanted === 1 && (intro.status === 'queued' || intro.status === 'sending')) {
+    // Not booked yet because the introduction hasn't gone. The real date is
+    // set from the moment it does go — this estimate is seconds out at most.
+    return { state: 'due', dueAt: plusSecondsFrom(intro.send_after, FOLLOWUP_DAYS * 86400), sentAt: null };
+  }
+  return none;
+}
+
+/**
+ * Cancel the follow-up for one address at one company — the Cancel button on
+ * WorkTrackr's panel. Covers both a booked follow-up and one still waiting for
+ * its introduction to go out. Returns how many were stopped; 0 means it had
+ * already gone or there wasn't one.
+ */
+export function cancelFollowup(externalCompanyId, email, reason = 'cancelled in WorkTrackr') {
+  const e = normEmail(email);
+  if (!externalCompanyId || !e) return { ok: true, cancelled: 0 };
+  const cid = String(externalCompanyId);
+
+  const tx = db.transaction(() => {
+    const booked = db.prepare(`
+      UPDATE service_email_sends SET status = 'cancelled', error = ?
+       WHERE external_company_id = ? AND lower(to_email) = ? AND step = 2 AND status = 'queued'
+    `).run(String(reason), cid, e);
+
+    const pending = db.prepare(`
+      UPDATE service_email_sends SET followup_wanted = 2
+       WHERE external_company_id = ? AND lower(to_email) = ? AND step = 1
+         AND followup_wanted = 1 AND status IN ('queued', 'sending')
+    `).run(cid, e);
+
+    return booked.changes + pending.changes;
+  });
+
+  return { ok: true, cancelled: tx() };
+}
+
+/** Every follow-up still waiting to go, soonest first — Studio's due list. */
+export function listDueFollowups() {
+  return db.prepare(`
+    SELECT f.id, f.external_company_id, f.company_name, f.contact_name,
+           f.to_email, f.send_after, p.sent_at AS intro_sent_at
+      FROM service_email_sends f
+      LEFT JOIN service_email_sends p ON p.id = f.parent_id
+     WHERE f.step = 2 AND f.status = 'queued'
+     ORDER BY f.send_after ASC
+     LIMIT 500
+  `).all().map(r => ({
+    id: r.id,
+    externalCompanyId: r.external_company_id,
+    companyName: r.company_name,
+    contactName: r.contact_name,
+    toEmail: r.to_email,
+    dueAt: r.send_after,
+    introSentAt: r.intro_sent_at,
+  }));
+}
+
+/** Cancel one follow-up from Studio's due list. */
+export function cancelFollowupById(id, reason = 'cancelled in Studio') {
+  const r = db.prepare(`
+    UPDATE service_email_sends SET status = 'cancelled', error = ?
+     WHERE id = ? AND step = 2 AND status = 'queued'
+  `).run(String(reason), String(id));
+  return r.changes ? { ok: true } : { ok: false, reason: 'too_late' };
 }
