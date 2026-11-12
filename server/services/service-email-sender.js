@@ -657,6 +657,24 @@ export async function processDue() {
       continue;
     }
 
+    // A follow-up never goes to a company that is now dead or a customer in
+    // WorkTrackr. The stage change normally cancels it straight away; this is
+    // the net under that, using the stage copy Studio keeps for keep-warm
+    // (pushed on every change and fully refreshed every half hour). It also
+    // covers follow-ups booked by hand for a company that was already dead.
+    if (row.step === 2) {
+      const stage = companyStage(row.external_company_id);
+      if (stage === 'dead' || stage === 'customer') {
+        db.prepare(`
+          UPDATE service_email_sends
+             SET status = 'cancelled', error = ?
+           WHERE id = ?
+        `).run(`company is ${stage === 'dead' ? 'dead' : 'a customer'} in WorkTrackr`, row.id);
+        results.skipped++;
+        continue;
+      }
+    }
+
     const services = parseServices(row);
     if (!services.length) {
       db.prepare(`
@@ -899,4 +917,138 @@ export function cancelFollowupById(id, reason = 'cancelled in Studio') {
      WHERE id = ? AND step = 2 AND status = 'queued'
   `).run(String(reason), String(id));
   return r.changes ? { ok: true } : { ok: false, reason: 'too_late' };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Booking a follow-up by hand
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The company's current WorkTrackr stage, from the copy keep-warm keeps in
+ * keepwarm_stages. null when Studio has never heard of the company, or the
+ * table is missing (keep-warm not loaded) — unknown never blocks a send.
+ */
+function companyStage(externalCompanyId) {
+  if (!externalCompanyId) return null;
+  try {
+    const r = db.prepare(
+      'SELECT stage FROM keepwarm_stages WHERE external_company_id = ?'
+    ).get(String(externalCompanyId));
+    return r && r.stage ? String(r.stage) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Book a follow-up for an introduction that went out without the box ticked —
+ * the "Book a follow-up by hand" box on Studio's Service Emails page.
+ *
+ * Finds the most recent introduction to the address and books one follow-up
+ * for 7 days after it actually went: the date ticking the box would have given.
+ * Emails nothing itself; the row joins the normal queue, threads under the
+ * intro, and is cancelled by a stage change or an unsubscribe like any other.
+ *
+ * Always returns { result, ... } — every outcome is something the operator
+ * needs to see, so none of them is an exception:
+ *   booked · already_booked · already_sent · no_intro · intro_pending
+ *   too_old · blocked · cancelled_before · company_dead · company_customer
+ *   no_email
+ */
+export function bookFollowupByHand(email) {
+  const e = normEmail(email);
+  if (!e || !e.includes('@')) return { result: 'no_email' };
+
+  // Most recent introduction that actually went out or is about to. An undone
+  // one never happened; a failed or suppressed one reached nobody.
+  const intro = db.prepare(`
+    SELECT * FROM service_email_sends
+     WHERE lower(to_email) = ? AND step = 1
+       AND status IN ('sent', 'queued', 'sending')
+     ORDER BY created_at DESC, rowid DESC
+     LIMIT 1
+  `).get(e);
+  if (!intro) return { result: 'no_intro' };
+
+  const company = intro.company_name || null;
+
+  if (intro.status !== 'sent') return { result: 'intro_pending', company };
+
+  // Never a second one. Any follow-up already waiting for this address counts,
+  // even one hanging off a different introduction.
+  const waiting = db.prepare(`
+    SELECT send_after FROM service_email_sends
+     WHERE lower(to_email) = ? AND step = 2 AND status IN ('queued', 'sending')
+     ORDER BY send_after LIMIT 1
+  `).get(e);
+  if (waiting) return { result: 'already_booked', company, dueAt: waiting.send_after };
+
+  const child = db.prepare(`
+    SELECT status, sent_at, error FROM service_email_sends
+     WHERE parent_id = ? ORDER BY created_at DESC LIMIT 1
+  `).get(intro.id);
+  if (child && child.status === 'sent') {
+    return { result: 'already_sent', company, sentAt: child.sent_at };
+  }
+  // A cancel usually means they replied or the company went dead. Booking by
+  // hand must not quietly override that.
+  if (child || intro.followup_wanted === 2) {
+    return { result: 'cancelled_before', company, reason: (child && child.error) || null };
+  }
+
+  if (isSuppressed(e)) return { result: 'blocked', company };
+
+  const stage = companyStage(intro.external_company_id);
+  if (stage === 'dead') return { result: 'company_dead', company };
+  if (stage === 'customer') return { result: 'company_customer', company };
+
+  const introAt = intro.sent_at || intro.send_after;
+  const dueAt = plusSecondsFrom(introAt, FOLLOWUP_DAYS * 86400);
+  // Never in the past: it would go the moment it was booked.
+  if (!dueAt || dueAt <= nowIso()) return { result: 'too_old', company, introAt };
+
+  const services = parseServices(intro);
+  if (!services.length) return { result: 'no_intro' };
+
+  const tx = db.transaction(() => {
+    // Re-checked inside the transaction so two quick presses can't book two.
+    const again = db.prepare(
+      'SELECT 1 FROM service_email_sends WHERE parent_id = ?'
+    ).get(intro.id);
+    if (again) return false;
+
+    db.prepare(`
+      INSERT INTO service_email_sends
+        (id, external_company_id, company_name, contact_name, referrer_name,
+         spoke_to, to_email, services_json, step, status, send_after, parent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2, 'queued', ?, ?)
+    `).run(
+      uuid(),
+      intro.external_company_id,
+      intro.company_name,
+      intro.contact_name,
+      intro.referrer_name || null,
+      intro.spoke_to || null,
+      intro.to_email,
+      JSON.stringify(services),
+      dueAt,
+      intro.id,
+    );
+    // Recorded on the intro too, so the WorkTrackr panel reads it the same
+    // way as a ticked one.
+    db.prepare(
+      'UPDATE service_email_sends SET followup_wanted = 1 WHERE id = ?'
+    ).run(intro.id);
+    return true;
+  });
+
+  if (!tx()) {
+    const now = db.prepare(`
+      SELECT send_after FROM service_email_sends
+       WHERE parent_id = ? ORDER BY created_at DESC LIMIT 1
+    `).get(intro.id);
+    return { result: 'already_booked', company, dueAt: now ? now.send_after : null };
+  }
+
+  return { result: 'booked', company, contact: intro.contact_name || null, dueAt };
 }

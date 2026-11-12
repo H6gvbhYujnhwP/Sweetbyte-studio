@@ -194,6 +194,111 @@ function FollowupsDue({ rows, error, onCancelled }) {
   );
 }
 
+// "Fri 14 Nov" — the day a follow-up goes or went, in UK time.
+function dayLabel(iso) {
+  if (!iso) return 'an unknown date';
+  const d = new Date(`${iso.replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/London' });
+}
+
+// Every answer the server can give, as one sentence and a tone. Each refusal is
+// spelled out because each one is a way this could otherwise fail quietly.
+function bookingMessage(d) {
+  const co = d.company || 'that company';
+  switch (d.result) {
+    case 'booked':
+      return { tone: 'good', text: `Booked. ${co} will get the follow-up on ${dayLabel(d.dueAt)}.` };
+    case 'already_booked':
+      return { tone: 'warn', text: `Already booked for ${dayLabel(d.dueAt)}. Nothing changed.` };
+    case 'already_sent':
+      return { tone: 'warn', text: `The follow-up already went on ${dayLabel(d.sentAt)}. Nothing booked.` };
+    case 'no_intro':
+      return { tone: 'bad', text: 'No introduction has ever been sent to that address. Nothing booked.' };
+    case 'intro_pending':
+      return { tone: 'warn', text: 'The introduction to that address is still sending. Try again in a minute.' };
+    case 'too_old':
+      return { tone: 'bad', text: `That introduction went on ${dayLabel(d.introAt)}, so its follow-up date has passed. Too old to follow up automatically.` };
+    case 'blocked':
+      return { tone: 'bad', text: 'That address has unsubscribed or bounced. Nothing booked.' };
+    case 'cancelled_before':
+      return { tone: 'bad', text: `A follow-up to that address was cancelled${d.reason ? ` (${d.reason})` : ''}. Nothing booked.` };
+    case 'company_dead':
+      return { tone: 'bad', text: `${co} is dead in WorkTrackr. Nothing booked.` };
+    case 'company_customer':
+      return { tone: 'bad', text: `${co} is a customer in WorkTrackr. Nothing booked.` };
+    case 'no_email':
+      return { tone: 'bad', text: 'Enter an email address first.' };
+    default:
+      return { tone: 'bad', text: 'Could not book that follow-up. Try again.' };
+  }
+}
+
+const TONE = {
+  good: { fg: GREEN,  bg: GREEN_BG },
+  warn: { fg: AMBER,  bg: AMBER_BG },
+  bad:  { fg: DANGER, bg: DANGER_BG },
+};
+
+function BookByHand({ onBooked }) {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const book = async () => {
+    if (!email.trim()) { setMsg(bookingMessage({ result: 'no_email' })); return; }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch('/api/service-email-log/followups/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const d = r.ok ? await r.json() : { result: 'error' };
+      setMsg(bookingMessage(d));
+      if (d.result === 'booked') { setEmail(''); onBooked(); }
+    } catch {
+      setMsg(bookingMessage({ result: 'error' }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const t = msg ? TONE[msg.tone] : null;
+
+  return (
+    <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: 10, padding: '12px 14px', marginBottom: 20 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: SB.dark }}>Book a follow-up by hand</div>
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 2, marginBottom: 10 }}>
+        For an introduction sent without the box ticked. It goes out 7 days after the introduction, the same as ticking it would have.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input
+          value={email}
+          onChange={(e) => { setEmail(e.target.value); setMsg(null); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) book(); }}
+          placeholder="dave@acme.co.uk"
+          aria-label="Email address the introduction was sent to"
+          style={{
+            flex: 1, minWidth: 240, padding: '8px 11px', fontSize: 13,
+            border: `1px solid ${BORDER}`, borderRadius: 8, background: CARD, color: TEXT,
+          }}
+        />
+        <button type="button" onClick={book} disabled={busy} style={{
+          background: SB.dark, color: '#fff', border: 'none', borderRadius: 8,
+          padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+        }}>{busy ? 'Booking…' : 'Book follow-up'}</button>
+      </div>
+      {msg && (
+        <div style={{ marginTop: 10, fontSize: 13, color: t.fg, background: t.bg, borderRadius: 6, padding: '8px 11px' }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Row({ r }) {
   return (
     <tr>
@@ -318,6 +423,8 @@ export default function ServiceEmailLog() {
       )}
 
       <FollowupsDue rows={due} error={dueError} onCancelled={() => { loadDue(); load(); }} />
+
+      <BookByHand onBooked={() => { loadDue(); load(); }} />
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <input

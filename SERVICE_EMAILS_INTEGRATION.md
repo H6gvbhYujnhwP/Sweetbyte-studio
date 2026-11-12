@@ -113,6 +113,20 @@ The follow-up threads under the intro (`In-Reply-To`/`References` built from the
 intro's stored SES id as `<id@<region>.amazonses.com>`, `email.amazonses.com` in
 us-east-1). The brochure rides on the intro only.
 
+**Booking one by hand (Studio only).** "Book a follow-up by hand" on the
+Service Emails page takes an address, finds the most recent intro that went to
+it, and books one follow-up for 7 days after that intro — the date the tick
+would have given. Refuses, with a message, when: already booked, already sent,
+no intro, intro still sending, intro over 7 days old (never booked in the past),
+address unsubscribed/bounced, a follow-up was cancelled before, or the company
+is dead or a customer in WorkTrackr. Emails nothing itself.
+
+**Dead or customer companies never get a follow-up.** Besides the immediate
+cancel on stage change, every follow-up re-checks the company's stage at send
+time against `keepwarm_stages` (Studio's copy of WorkTrackr stages: pushed on
+every change, fully refreshed every half hour) and is cancelled if it is
+`dead` or `customer`. An unknown company never blocks a send.
+
 Stopping one: Cancel on WorkTrackr's panel (`POST /cancel-followup`), Cancel on
 Studio's Service Emails page ("Follow-ups due" list), stage change to
 dead/customer, or the recipient unsubscribing. Studio cannot see replies — they

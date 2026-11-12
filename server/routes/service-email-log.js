@@ -7,16 +7,19 @@
  * the two auth models in one router is how a bridge endpoint accidentally ends
  * up reachable from a browser session, or vice versa.
  *
- * Read-only, with ONE exception: cancelling a follow-up from the "Follow-ups
- * due" list. Studio cannot see replies (they land in Outlook), so this list is
- * where the operator stops a follow-up to someone who has already answered.
+ * Read-only, with TWO exceptions, both about follow-ups:
+ *  - cancelling one from the "Follow-ups due" list. Studio cannot see replies
+ *    (they land in Outlook), so this list is where the operator stops a
+ *    follow-up to someone who has already answered.
+ *  - booking one by hand for an introduction sent without the box ticked.
+ *    That only adds a row to the same queue; it emails nothing itself.
  * Nothing here resends or edits, and a sent email cannot be cancelled.
  */
 
 import express from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { listDueFollowups, cancelFollowupById } from '../services/service-email-sender.js';
+import { listDueFollowups, cancelFollowupById, bookFollowupByHand } from '../services/service-email-sender.js';
 
 const router = express.Router();
 
@@ -127,6 +130,21 @@ router.post('/followups/:id/cancel', (req, res) => {
   } catch (err) {
     console.error('[service-email-log] cancel follow-up failed:', err.message);
     res.status(500).json({ error: 'Could not cancel that follow-up' });
+  }
+});
+
+/**
+ * POST /api/service-email-log/followups/book
+ * Body: { email }
+ * Always 200 with { result, ... } — every outcome, including the refusals, is
+ * an answer for the screen, not an error. See bookFollowupByHand().
+ */
+router.post('/followups/book', (req, res) => {
+  try {
+    res.json(bookFollowupByHand((req.body || {}).email));
+  } catch (err) {
+    console.error('[service-email-log] book follow-up failed:', err.message);
+    res.status(500).json({ error: 'Could not book that follow-up' });
   }
 });
 
